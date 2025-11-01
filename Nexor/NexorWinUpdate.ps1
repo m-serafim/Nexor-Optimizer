@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Nexor - Complete Windows 11 Fresh Setup Script (Fixed Console Freezing)
 .DESCRIPTION
@@ -58,8 +58,9 @@ try {
 # ============================================
 $nexorDir = "$env:ProgramData\Nexor"
 $stateFile = "$nexorDir\state.json"
-$maxUpdateRounds = 15
-$maxReboots = 10
+$maxUpdateRounds = 100
+$maxReboots = 50
+$consecutiveNoUpdatesRequired = 3
 
 # ============================================
 # CONSOLE UI HELPERS (ASCII ONLY)
@@ -447,7 +448,7 @@ function Search-WindowsUpdates {
 }
 
 # ============================================
-# PHASE 0: WINDOWS UPDATES (ENHANCED)
+# PHASE 0: WINDOWS UPDATES (ENHANCED - NEVER GIVES UP)
 # ============================================
 function Install-WindowsUpdates($state) {
     Write-Header "PHASE 1: Windows Updates (Round $($state.UpdateRound + 1)/$maxUpdateRounds)"
@@ -462,12 +463,12 @@ function Install-WindowsUpdates($state) {
             Reset-WindowsUpdateServices -FullReset $fullReset
         }
         
-        Write-Step "Searching for updates (trying multiple methods)..."
+        Write-Step "Searching for updates (trying ALL methods)..."
         Write-Host ""
         
         $updates = @()
         
-        # Try multiple search methods
+        # Try ALL 4 search methods (no early exit)
         for ($method = 1; $method -le 4; $method++) {
             $methodUpdates = Search-WindowsUpdates -Method $method
             
@@ -477,35 +478,52 @@ function Install-WindowsUpdates($state) {
                 $updates = $updates | Sort-Object -Property KB -Unique
             }
             
-            if ($updates.Count -gt 0 -and $method -lt 3) {
-                break # Found updates with early method
-            }
-            
-            if ($method -lt 4) {
-                Start-Sleep -Seconds 2
-            }
+            Start-Sleep -Seconds 2
         }
         
         if ($updates.Count -eq 0) {
-            Write-Info "No updates found, performing final verification..."
+            Write-Info "No updates found, performing AGGRESSIVE final verification..."
             Start-Sleep -Seconds 3
             
-            # Final COM API check
+            # AGGRESSIVE final COM API check
             $updateSession = New-Object -ComObject Microsoft.Update.Session
             $updateSearcher = $updateSession.CreateUpdateSearcher()
             $updateSearcher.Online = $true
             $searchResult = $updateSearcher.Search("IsInstalled=0 and Type='Software'")
             
             if ($searchResult.Updates.Count -eq 0) {
-                Write-Success "All Windows updates installed!"
-                $state.LastUpdateCheck = (Get-Date).ToString('o')
-                Write-Log "All updates complete" "Success"
+                # Initialize consecutive counter if not exists
+                if (-not $state.PSObject.Properties['ConsecutiveNoUpdates']) {
+                    $state | Add-Member -NotePropertyName 'ConsecutiveNoUpdates' -NotePropertyValue 0
+                }
                 
-                # Clear any failed update tracking
-                $state.FailedUpdates = @()
-                Save-State $state
-                return $true
+                $state.ConsecutiveNoUpdates++
+                Write-Success "No updates found (Consecutive checks: $($state.ConsecutiveNoUpdates)/$consecutiveNoUpdatesRequired)"
+                Write-Log "No updates found - consecutive check $($state.ConsecutiveNoUpdates)" "Success"
+                
+                if ($state.ConsecutiveNoUpdates -ge $consecutiveNoUpdatesRequired) {
+                    Write-Success "ALL WINDOWS UPDATES VERIFIED COMPLETE!"
+                    Write-Success "Verified $consecutiveNoUpdatesRequired consecutive times with no updates found"
+                    $state.LastUpdateCheck = (Get-Date).ToString('o')
+                    Write-Log "All updates complete after $consecutiveNoUpdatesRequired consecutive checks" "Success"
+                    
+                    # Clear any failed update tracking
+                    $state.FailedUpdates = @()
+                    Save-State $state
+                    return $true  # ONLY exit when verified multiple times
+                } else {
+                    Write-Info "Running additional verification check to ensure no updates missed..."
+                    Write-Info "Waiting 10 seconds before next verification..."
+                    $state.UpdateRound++
+                    Save-State $state
+                    Start-Sleep -Seconds 10
+                    return $false  # Continue checking
+                }
             } else {
+                # Found updates - reset consecutive counter
+                if ($state.PSObject.Properties['ConsecutiveNoUpdates']) {
+                    $state.ConsecutiveNoUpdates = 0
+                }
                 Write-Warn "Found $($searchResult.Updates.Count) update(s) via final check"
                 Write-Log "Final check found updates: $($searchResult.Updates.Count)" "Warning"
                 
@@ -522,6 +540,11 @@ function Install-WindowsUpdates($state) {
                         ComUpdate = $update
                     }
                 }
+            }
+        } else {
+            # Found updates - reset consecutive counter
+            if ($state.PSObject.Properties['ConsecutiveNoUpdates']) {
+                $state.ConsecutiveNoUpdates = 0
             }
         }
         
@@ -565,7 +588,9 @@ function Install-WindowsUpdates($state) {
                     Write-Warn "$($failedInInstall.Count) update(s) had issues"
                     foreach ($failed in $failedInInstall) {
                         if ($failed.KB) {
-                            $state.FailedUpdates += $failed.KB
+                            if ($state.FailedUpdates -notcontains $failed.KB) {
+                                $state.FailedUpdates += $failed.KB
+                            }
                         }
                         Write-Info "[!] $($failed.Title) - $($failed.Result)"
                         Write-Log "Update issue: $($failed.Title) - $($failed.Result)" "Warning"
@@ -620,30 +645,42 @@ function Install-WindowsUpdates($state) {
             Invoke-SystemReboot $state "Windows Updates"
         }
         
+        # CRITICAL: Only exit at safety limit, NOT at normal max rounds
         if ($state.UpdateRound -ge $maxUpdateRounds) {
-            Write-Warn "Maximum update rounds reached"
-            Write-Log "Max rounds reached: $maxUpdateRounds" "Warning"
+            Write-Err "═══════════════════════════════════════════════════════════"
+            Write-Err "CRITICAL: Reached safety limit of $maxUpdateRounds rounds"
+            Write-Err "This indicates a SERIOUS problem with Windows Update"
+            Write-Err "═══════════════════════════════════════════════════════════"
+            Write-Log "CRITICAL: Max rounds safety limit reached" "Error"
             
             if ($state.FailedUpdates.Count -gt 0) {
-                Write-Warn "Some updates may require manual installation"
-                Write-Info "Failed updates: $($state.FailedUpdates -join ', ')"
+                Write-Err "Failed updates detected:"
+                foreach ($failedKB in $state.FailedUpdates) {
+                    Write-Err "  - $failedKB"
+                }
             }
             
-            return $true
+            Write-Warn "Proceeding to next phase, but manual update check REQUIRED"
+            Start-Sleep -Seconds 10
+            return $true  # Exit only at safety limit
         }
         
-        return $false
+        return $false  # Continue updating
         
     } catch {
         Write-Err "Error during Windows Update: $_"
         Write-Log "Update error: $_" "Error"
         
+        # Give it 3 retry attempts before giving up on errors
         if ($state.UpdateRound -lt 3) {
+            Write-Warn "Retrying after error (Attempt $($state.UpdateRound + 1)/3)..."
             $state.UpdateRound++
             Save-State $state
+            Start-Sleep -Seconds 10
             return $false
         }
         
+        Write-Err "Multiple errors detected, proceeding to next phase"
         return $true
     }
 }
@@ -1131,17 +1168,24 @@ try {
     }
     
     # Phase 3: Final verification and report
-    if ($state.Phase -eq 3) {
-        Write-Header "FINAL VERIFICATION"
+if ($state.Phase -eq 3) {
+    Write-Header "FINAL VERIFICATION"
+    
+    Write-Step "Performing final update check..."
+    try {
+        Import-Module PSWindowsUpdate -Force -ErrorAction Stop
         
-        Write-Step "Performing final update check..."
-        try {
-            Import-Module PSWindowsUpdate -Force -ErrorAction Stop
+        # AGGRESSIVE FINAL VERIFICATION LOOP (ADD THIS)
+        $finalVerificationAttempts = 0
+        $maxFinalAttempts = 5
+        
+        while ($finalVerificationAttempts -lt $maxFinalAttempts) {
+            Write-Step "Final verification attempt $($finalVerificationAttempts + 1)/$maxFinalAttempts..."
             
             # Try multiple methods for final check
             $finalCheck = @()
             
-            for ($method = 1; $method -le 3; $method++) {
+            for ($method = 1; $method -le 4; $method++) {  # Changed to 4 methods
                 $methodUpdates = Search-WindowsUpdates -Method $method
                 if ($methodUpdates.Count -gt 0) {
                     $finalCheck += $methodUpdates
@@ -1149,48 +1193,60 @@ try {
                 }
             }
             
-            if ($finalCheck.Count -gt 0) {
-                Write-Warn "$($finalCheck.Count) update(s) found after cleanup"
-                Write-Info "Installing remaining updates..."
-                Write-Host ""
-                
-                foreach ($update in $finalCheck) {
-                    $updateTitle = $update.Title
-                    if ($update.KB) {
-                        $updateTitle += " ($($update.KB))"
-                    }
-                    Write-Info "[+] $updateTitle"
-                    $state.UpdateLog += $updateTitle
-                }
-                Write-Log "Final check found updates: $($finalCheck.Count)" "Warning"
-                
-                Write-Host ""
-                Write-Step "Installing final updates..."
-                Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -IgnoreReboot -ErrorAction Stop | Out-Null
-                Write-Success "Final updates installed"
-                Write-Log "Final updates installed: $($finalCheck.Count)" "Success"
-                
-                Save-State $state
-                
-                Start-Sleep -Seconds 5
-                if (Test-RebootRequired) {
-                    Invoke-SystemReboot $state "Final Windows Updates"
-                }
-                
-                # Re-run verification after installing
-                & $PSCommandPath -Silent:$Silent
-                exit 0
-            } else {
-                Write-Success "All updates verified and installed"
-                Write-Log "All updates verified" "Success"
+            if ($finalCheck.Count -eq 0) {
+                Write-Success "No updates found - System fully updated!"
+                Write-Log "Final verification passed: No updates found" "Success"
+                break  # Exit loop - truly complete
             }
-        } catch {
-            Write-Warn "Final check completed with warnings"
-            Write-Log "Final check warning: $_" "Warning"
+            
+            # Found updates - install them
+            Write-Warn "$($finalCheck.Count) update(s) found in final check"
+            Write-Info "Installing remaining updates..."
+            Write-Host ""
+            
+            foreach ($update in $finalCheck) {
+                $updateTitle = $update.Title
+                if ($update.KB) {
+                    $updateTitle += " ($($update.KB))"
+                }
+                Write-Info "[+] $updateTitle"
+                $state.UpdateLog += $updateTitle
+            }
+            Write-Log "Final check found updates: $($finalCheck.Count)" "Warning"
+            
+            Write-Host ""
+            Write-Step "Installing final updates..."
+            Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -IgnoreReboot -ErrorAction Stop | Out-Null
+            Write-Success "Final updates installed"
+            Write-Log "Final updates installed: $($finalCheck.Count)" "Success"
+            
+            $finalVerificationAttempts++
+            
+            Save-State $state
+            
+            Start-Sleep -Seconds 5
+            if (Test-RebootRequired) {
+                Invoke-SystemReboot $state "Final Windows Updates"
+            }
+            
+            # Small delay before next check
+            Start-Sleep -Seconds 10
         }
         
-        Write-Host ""
-        Write-Step "Performing final device check..."
+        # Check if we exhausted attempts with updates still pending
+        if ($finalVerificationAttempts -ge $maxFinalAttempts) {
+            Write-Warn "Reached maximum final verification attempts"
+            Write-Warn "Some updates may still be pending - manual check recommended"
+            Write-Log "Final verification limit reached" "Warning"
+        }
+        
+    } catch {
+        Write-Warn "Final check completed with warnings"
+        Write-Log "Final check warning: $_" "Warning"
+    }
+    
+    Write-Host ""
+    Write-Step "Performing final device check..."
         $finalDeviceCheck = Get-WmiObject Win32_PnPEntity | Where-Object { 
             $_.ConfigManagerErrorCode -ne 0
         }
@@ -1235,3 +1291,4 @@ try {
     }
     exit 1
 }
+
