@@ -1,9 +1,14 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using System.Management;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 
@@ -13,12 +18,14 @@ namespace Nexor
     {
         private string _currentLanguage;
         private bool _isProcessing = false;
+        private List<OptimizationItem> _selectedOptimizations = new List<OptimizationItem>();
 
         public PerformancePage(string language)
         {
             InitializeComponent();
             _currentLanguage = language;
             UpdateLanguage();
+            InitializeOptimizationTracking();
         }
 
         private void Page_Loaded(object sender, RoutedEventArgs e)
@@ -27,7 +34,69 @@ namespace Nexor
             LoadCurrentSettings();
         }
 
-        #region Animation Methods (keeping existing code)
+        #region Optimization Tracking
+
+        private void InitializeOptimizationTracking()
+        {
+            // System Tweaks
+            ChkGameMode.Tag = new OptimizationItem("EnableGameMode.ps1", "DisableGameMode.ps1", "Game Mode");
+            ChkPowerPlan.Tag = new OptimizationItem("SetHighPerformancePower.ps1", "SetBalancedPower.ps1", "High Performance Power Plan");
+            ChkUltimatePower.Tag = new OptimizationItem("EnableUltimatePerformance.ps1", "DisableUltimatePerformance.ps1", "Ultimate Performance");
+            ChkHibernation.Tag = new OptimizationItem("DisableHibernation.ps1", "EnableHibernation.ps1", "Hibernation");
+            ChkFastStartup.Tag = new OptimizationItem("DisableFastStartup.ps1", "EnableFastStartup.ps1", "Fast Startup");
+
+            // Visual Effects
+            ChkAnimations.Tag = new OptimizationItem("DisableAnimations.ps1", "EnableAnimations.ps1", "Window Animations");
+            ChkTransparency.Tag = new OptimizationItem("DisableTransparency.ps1", "EnableTransparency.ps1", "Transparency Effects");
+            ChkBestPerformance.Tag = new OptimizationItem("SetBestPerformance.ps1", "SetBestAppearance.ps1", "Best Performance Mode");
+
+            // Network
+            ChkDNS.Tag = new OptimizationItem("SetCloudflareDNS.ps1", "ResetDNS.ps1", "DNS Optimization");
+            ChkTCP.Tag = new OptimizationItem("OptimizeTCP.ps1", "ResetTCP.ps1", "TCP/IP Optimization");
+            ChkThrottle.Tag = new OptimizationItem("DisableNetworkThrottle.ps1", "EnableNetworkThrottle.ps1", "Network Throttling");
+
+            // Gaming
+            ChkGPUScheduling.Tag = new OptimizationItem("EnableGPUScheduling.ps1", "DisableGPUScheduling.ps1", "GPU Scheduling");
+            ChkFullscreen.Tag = new OptimizationItem("DisableFullscreenOpt.ps1", "EnableFullscreenOpt.ps1", "Fullscreen Optimizations");
+            ChkMSI.Tag = new OptimizationItem("EnableMSIMode.ps1", "DisableMSIMode.ps1", "MSI Mode");
+
+            // Memory & Storage
+            ChkSuperfetch.Tag = new OptimizationItem("DisableSuperfetch.ps1", "EnableSuperfetch.ps1", "Superfetch");
+            ChkPageFile.Tag = new OptimizationItem("OptimizePageFile.ps1", "ResetPageFile.ps1", "Virtual Memory");
+            ChkIndexing.Tag = new OptimizationItem("DisableIndexing.ps1", "EnableIndexing.ps1", "Search Indexing");
+            ChkTRIM.Tag = new OptimizationItem("EnableTRIM.ps1", "DisableTRIM.ps1", "TRIM");
+
+            // Privacy
+            ChkTelemetry.Tag = new OptimizationItem("DisableTelemetry.ps1", "EnableTelemetry.ps1", "Telemetry");
+            ChkBackgroundApps.Tag = new OptimizationItem("DisableBackgroundApps.ps1", "EnableBackgroundApps.ps1", "Background Apps");
+            ChkCortana.Tag = new OptimizationItem("DisableCortana.ps1", "EnableCortana.ps1", "Cortana");
+            ChkTips.Tag = new OptimizationItem("DisableWindowsTips.ps1", "EnableWindowsTips.ps1", "Windows Tips");
+
+            // Advanced
+            ChkCPUPriority.Tag = new OptimizationItem("OptimizeCPUPriority.ps1", "ResetCPUPriority.ps1", "CPU Priority");
+            ChkNagle.Tag = new OptimizationItem("DisableNagle.ps1", "EnableNagle.ps1", "Nagle's Algorithm");
+            ChkTimer.Tag = new OptimizationItem("EnableHighPrecisionTimer.ps1", "DisableHighPrecisionTimer.ps1", "High Precision Timer");
+            ChkCoreParking.Tag = new OptimizationItem("DisableCoreParking.ps1", "EnableCoreParking.ps1", "Core Parking");
+        }
+
+        private class OptimizationItem
+        {
+            public string EnableScript { get; set; }
+            public string DisableScript { get; set; }
+            public string Name { get; set; }
+            public bool Enable { get; set; }
+
+            public OptimizationItem(string enableScript, string disableScript, string name)
+            {
+                EnableScript = enableScript;
+                DisableScript = disableScript;
+                Name = name;
+            }
+        }
+
+        #endregion
+
+        #region Animation Methods
         private async void AnimatePageLoad()
         {
             try
@@ -161,18 +230,14 @@ namespace Nexor
 
         #region PowerShell Script Execution Infrastructure
 
-        /// <summary>
-        /// Extracts a PowerShell script from embedded resources or file system
-        /// </summary>
         private bool ExtractScript(string scriptName, string outputPath)
         {
             try
             {
-                // Try to load from embedded resources first
                 var assembly = System.Reflection.Assembly.GetExecutingAssembly();
                 var resourceName = $"Nexor.{scriptName}";
 
-                using (Stream stream = assembly.GetManifestResourceStream(resourceName))
+                using (Stream? stream = assembly.GetManifestResourceStream(resourceName))
                 {
                     if (stream != null)
                     {
@@ -184,13 +249,11 @@ namespace Nexor
                     }
                 }
 
-                // Fallback: Try to find in application directory
                 string appDir = AppDomain.CurrentDomain.BaseDirectory;
                 string physicalScriptPath = Path.Combine(appDir, scriptName);
 
                 if (!File.Exists(physicalScriptPath))
                 {
-                    // Try project root (for development)
                     string projectRoot = Path.GetFullPath(Path.Combine(appDir, @"..\..\"));
                     string altScriptPath = Path.Combine(projectRoot, scriptName);
                     if (File.Exists(altScriptPath))
@@ -213,9 +276,6 @@ namespace Nexor
             }
         }
 
-        /// <summary>
-        /// Runs a PowerShell script with ExecutionPolicy Bypass (HIDDEN - no console window)
-        /// </summary>
         private async Task<ScriptResult> RunPowerShellScriptAsync(string scriptPath)
         {
             return await Task.Run(() =>
@@ -227,14 +287,25 @@ namespace Nexor
                         FileName = "powershell.exe",
                         Arguments = $"-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{scriptPath}\"",
                         UseShellExecute = false,
-                        CreateNoWindow = true,  // ALWAYS hidden
+                        CreateNoWindow = true,
                         WindowStyle = ProcessWindowStyle.Hidden,
                         RedirectStandardOutput = true,
                         RedirectStandardError = true
                     };
 
-                    using (Process process = Process.Start(psi))
+                    using (Process? process = Process.Start(psi))
                     {
+                        if (process == null)
+                        {
+                            return new ScriptResult
+                            {
+                                Success = false,
+                                ExitCode = -1,
+                                Output = string.Empty,
+                                Error = "Failed to start process"
+                            };
+                        }
+
                         string output = process.StandardOutput.ReadToEnd();
                         string error = process.StandardError.ReadToEnd();
 
@@ -255,100 +326,332 @@ namespace Nexor
                     {
                         Success = false,
                         ExitCode = -1,
+                        Output = string.Empty,
                         Error = ex.Message
                     };
                 }
             });
         }
 
-        /// <summary>
-        /// Execute a performance tweak script
-        /// </summary>
-        private async Task ExecuteTweakScript(string scriptName, string tweakName)
+        private class ScriptResult
+        {
+            public bool Success { get; set; }
+            public int ExitCode { get; set; }
+            public string Output { get; set; } = string.Empty;
+            public string Error { get; set; } = string.Empty;
+        }
+
+        #endregion
+
+        #region Restore Point Management
+
+        private async Task<bool> CreateRestorePoint()
+        {
+            return await Task.Run(() =>
+            {
+                try
+                {
+                    string description = $"Nexor Optimizer - {DateTime.Now:yyyy-MM-dd HH:mm}";
+
+                    ManagementScope scope = new ManagementScope("\\\\localhost\\root\\default");
+                    ManagementPath path = new ManagementPath("SystemRestore");
+                    ObjectGetOptions options = new ObjectGetOptions();
+                    ManagementClass process = new ManagementClass(scope, path, options);
+
+                    ManagementBaseObject inParams = process.GetMethodParameters("CreateRestorePoint");
+                    inParams["Description"] = description;
+                    inParams["RestorePointType"] = 12;
+                    inParams["EventType"] = 100;
+
+                    ManagementBaseObject outParams = process.InvokeMethod("CreateRestorePoint", inParams, null);
+
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Restore point creation failed: {ex.Message}");
+                    return false;
+                }
+            });
+        }
+
+        #endregion
+
+        #region Batch Optimization
+
+        public enum RestorePointDialogResult
+        {
+            Cancel,
+            CreateAndOptimize,
+            OptimizeWithoutRestore
+        }
+
+        private async void BtnOptimize_Click(object sender, RoutedEventArgs e)
         {
             if (_isProcessing) return;
+
+            _selectedOptimizations.Clear();
+            CollectSelectedOptimizations();
+
+            if (_selectedOptimizations.Count == 0)
+            {
+                await ShowError(
+                    _currentLanguage == "PT" ? "Aviso" : "Warning",
+                    _currentLanguage == "PT"
+                        ? "Por favor, selecione pelo menos uma otimização!"
+                        : "Please select at least one optimization!"
+                );
+                return;
+            }
+
+            var result = await ShowRestorePointDialog();
+
+            if (result == RestorePointDialogResult.Cancel)
+            {
+                return;
+            }
 
             _isProcessing = true;
 
             try
             {
-                string scriptPath = Path.Combine(Path.GetTempPath(), scriptName);
-
-                if (!ExtractScript(scriptName, scriptPath))
+                if (result == RestorePointDialogResult.CreateAndOptimize)
                 {
-                    await ShowError(
-                        _currentLanguage == "PT" ? "Erro" : "Error",
-                        _currentLanguage == "PT"
-                            ? $"Script '{scriptName}' não encontrado!"
-                            : $"Script '{scriptName}' not found!"
-                    );
-                    return;
+                    ShowProgress(_currentLanguage == "PT" ? "Criando ponto de restauração..." : "Creating restore point...");
+
+                    bool restorePointCreated = await CreateRestorePoint();
+
+                    if (!restorePointCreated)
+                    {
+                        var continueAnyway = MessageBox.Show(
+                            _currentLanguage == "PT"
+                                ? "Falha ao criar ponto de restauração. Continuar mesmo assim?"
+                                : "Failed to create restore point. Continue anyway?",
+                            _currentLanguage == "PT" ? "Aviso" : "Warning",
+                            MessageBoxButton.YesNo,
+                            MessageBoxImage.Warning
+                        );
+
+                        if (continueAnyway != MessageBoxResult.Yes)
+                        {
+                            HideProgress();
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        await Task.Delay(1000);
+                    }
                 }
 
-                var result = await RunPowerShellScriptAsync(scriptPath);
-
-                // Clean up temp file
-                try { File.Delete(scriptPath); } catch { }
-
-                if (result.Success)
-                {
-                    await ShowSuccess(tweakName);
-                }
-                else if (result.ExitCode == 1)
-                {
-                    await ShowError(
-                        _currentLanguage == "PT" ? "Erro" : "Error",
-                        _currentLanguage == "PT"
-                            ? "O programa precisa de privilégios de Administrador!"
-                            : "The program needs Administrator privileges!"
-                    );
-                }
-                else
-                {
-                    await ShowError(
-                        _currentLanguage == "PT" ? "Erro" : "Error",
-                        _currentLanguage == "PT"
-                            ? $"Erro ao executar: {result.Error}"
-                            : $"Execution error: {result.Error}"
-                    );
-                }
+                await ApplyOptimizations();
+                await ShowCompletionMessage();
             }
             catch (Exception ex)
             {
-                await ShowError("Error", $"Exception: {ex.Message}");
+                await ShowError(
+                    _currentLanguage == "PT" ? "Erro" : "Error",
+                    $"Exception: {ex.Message}"
+                );
             }
             finally
             {
                 _isProcessing = false;
+                HideProgress();
             }
         }
 
-        /// <summary>
-        /// Script execution result
-        /// </summary>
-        private class ScriptResult
+        private void CollectSelectedOptimizations()
         {
-            public bool Success { get; set; }
-            public int ExitCode { get; set; }
-            public string Output { get; set; }
-            public string Error { get; set; }
+            var checkboxes = new[]
+            {
+                ChkGameMode, ChkPowerPlan, ChkUltimatePower, ChkHibernation, ChkFastStartup,
+                ChkAnimations, ChkTransparency, ChkBestPerformance,
+                ChkDNS, ChkTCP, ChkThrottle,
+                ChkGPUScheduling, ChkFullscreen, ChkMSI,
+                ChkSuperfetch, ChkPageFile, ChkIndexing, ChkTRIM,
+                ChkTelemetry, ChkBackgroundApps, ChkCortana, ChkTips,
+                ChkCPUPriority, ChkNagle, ChkTimer, ChkCoreParking
+            };
+
+            foreach (var checkbox in checkboxes)
+            {
+                if (checkbox.Tag is OptimizationItem item)
+                {
+                    item.Enable = checkbox.IsChecked == true;
+                    if (item.Enable || checkbox.IsChecked == false)
+                    {
+                        _selectedOptimizations.Add(item);
+                    }
+                }
+            }
+        }
+
+        private async Task ApplyOptimizations()
+        {
+            int current = 0;
+            int total = _selectedOptimizations.Count;
+
+            foreach (var optimization in _selectedOptimizations)
+            {
+                current++;
+
+                string progressText = _currentLanguage == "PT"
+                    ? $"Aplicando: {optimization.Name} ({current}/{total})"
+                    : $"Applying: {optimization.Name} ({current}/{total})";
+
+                ShowProgress(progressText);
+
+                string scriptToUse = optimization.Enable ? optimization.EnableScript : optimization.DisableScript;
+                string scriptPath = Path.Combine(Path.GetTempPath(), scriptToUse);
+
+                if (ExtractScript(scriptToUse, scriptPath))
+                {
+                    var result = await RunPowerShellScriptAsync(scriptPath);
+
+                    try { File.Delete(scriptPath); } catch { }
+
+                    if (!result.Success)
+                    {
+                        Debug.WriteLine($"Failed to apply {optimization.Name}: {result.Error}");
+                    }
+
+                    await Task.Delay(300);
+                }
+            }
+        }
+
+        private Task<RestorePointDialogResult> ShowRestorePointDialog()
+        {
+            var tcs = new TaskCompletionSource<RestorePointDialogResult>();
+
+            Dispatcher.Invoke(() =>
+            {
+                var dialog = new RestorePointWarningDialog(_currentLanguage);
+                dialog.Owner = Window.GetWindow(this);
+                dialog.ShowDialog();
+
+                tcs.SetResult(dialog.Result);
+            });
+
+            return tcs.Task;
+        }
+
+        private async Task ShowCompletionMessage()
+        {
+            int successCount = _selectedOptimizations.Count;
+
+            string message = _currentLanguage == "PT"
+                ? $"✅ {successCount} otimizações aplicadas com sucesso!\n\nÉ recomendado reiniciar o computador para aplicar todas as mudanças."
+                : $"✅ {successCount} optimizations applied successfully!\n\nIt's recommended to restart your computer to apply all changes.";
+
+            string title = _currentLanguage == "PT" ? "Concluído" : "Completed";
+
+            await Dispatcher.InvokeAsync(() =>
+            {
+                var result = MessageBox.Show(
+                    message,
+                    title,
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Information
+                );
+
+                if (result == MessageBoxResult.Yes)
+                {
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "shutdown",
+                        Arguments = "/r /t 10",
+                        CreateNoWindow = true,
+                        UseShellExecute = false
+                    });
+                }
+            });
         }
 
         #endregion
 
         #region UI Helpers
 
+        private void ShowProgress(string message)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                ProgressText.Text = message;
+                ProgressOverlay.Visibility = Visibility.Visible;
+
+                var storyboard = new Storyboard();
+                var fadeIn = new DoubleAnimation(0, 1, TimeSpan.FromSeconds(0.3));
+                Storyboard.SetTarget(fadeIn, ProgressOverlay);
+                Storyboard.SetTargetProperty(fadeIn, new PropertyPath("Opacity"));
+                storyboard.Children.Add(fadeIn);
+                storyboard.Begin();
+            });
+        }
+
+        private void HideProgress()
+        {
+            Dispatcher.Invoke(() =>
+            {
+                var storyboard = new Storyboard();
+                var fadeOut = new DoubleAnimation(1, 0, TimeSpan.FromSeconds(0.3));
+                Storyboard.SetTarget(fadeOut, ProgressOverlay);
+                Storyboard.SetTargetProperty(fadeOut, new PropertyPath("Opacity"));
+                storyboard.Completed += (s, e) => ProgressOverlay.Visibility = Visibility.Collapsed;
+                storyboard.Children.Add(fadeOut);
+                storyboard.Begin();
+            });
+        }
+
         private async Task ShowSuccess(string tweakName)
         {
             await Dispatcher.InvokeAsync(() =>
             {
-                // You can implement a toast notification here
-                MessageBox.Show(
-                    _currentLanguage == "PT" ? $"{tweakName} aplicado com sucesso!" : $"{tweakName} applied successfully!",
-                    _currentLanguage == "PT" ? "Sucesso" : "Success",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information
-                );
+                SuccessNotificationText.Text = _currentLanguage == "PT"
+                    ? $"✅ {tweakName} aplicado com sucesso!"
+                    : $"✅ {tweakName} applied successfully!";
+
+                SuccessNotification.Visibility = Visibility.Visible;
+
+                var storyboard = new Storyboard();
+
+                var slideDown = new DoubleAnimation(-100, 0, TimeSpan.FromSeconds(0.5))
+                {
+                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+                };
+                Storyboard.SetTarget(slideDown, SuccessNotification);
+                Storyboard.SetTargetProperty(slideDown, new PropertyPath("(UIElement.RenderTransform).(TranslateTransform.Y)"));
+
+                var fadeIn = new DoubleAnimation(0, 1, TimeSpan.FromSeconds(0.5));
+                Storyboard.SetTarget(fadeIn, SuccessNotification);
+                Storyboard.SetTargetProperty(fadeIn, new PropertyPath("Opacity"));
+
+                storyboard.Children.Add(slideDown);
+                storyboard.Children.Add(fadeIn);
+
+                storyboard.Completed += async (s, e) =>
+                {
+                    await Task.Delay(3000);
+
+                    var hideStoryboard = new Storyboard();
+                    var slideUp = new DoubleAnimation(0, -100, TimeSpan.FromSeconds(0.5))
+                    {
+                        EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn }
+                    };
+                    Storyboard.SetTarget(slideUp, SuccessNotification);
+                    Storyboard.SetTargetProperty(slideUp, new PropertyPath("(UIElement.RenderTransform).(TranslateTransform.Y)"));
+
+                    var fadeOut = new DoubleAnimation(1, 0, TimeSpan.FromSeconds(0.5));
+                    Storyboard.SetTarget(fadeOut, SuccessNotification);
+                    Storyboard.SetTargetProperty(fadeOut, new PropertyPath("Opacity"));
+
+                    hideStoryboard.Children.Add(slideUp);
+                    hideStoryboard.Children.Add(fadeOut);
+                    hideStoryboard.Completed += (s2, e2) => SuccessNotification.Visibility = Visibility.Collapsed;
+                    hideStoryboard.Begin();
+                };
+
+                storyboard.Begin();
             });
         }
 
@@ -369,7 +672,6 @@ namespace Nexor
             try
             {
                 // TODO: Load current system settings and update toggles
-                // This will check registry/system state and set checkbox states
             }
             catch (Exception ex)
             {
@@ -384,316 +686,307 @@ namespace Nexor
         private void UpdateLanguage()
         {
             // Keep your existing UpdateLanguage() method here
-            // (I'm omitting it to keep the code shorter, but keep all your existing translation code)
-        }
-
-        #endregion
-
-        #region Event Handlers - System Tweaks
-
-        private async void ChkGameMode_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("EnableGameMode.ps1", "Game Mode");
-        }
-
-        private async void ChkGameMode_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("DisableGameMode.ps1", "Game Mode");
-        }
-
-        private async void ChkPowerPlan_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("SetHighPerformancePower.ps1", "High Performance Power Plan");
-        }
-
-        private async void ChkPowerPlan_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("SetBalancedPower.ps1", "Balanced Power Plan");
-        }
-
-        private async void ChkUltimatePower_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("EnableUltimatePerformance.ps1", "Ultimate Performance");
-        }
-
-        private async void ChkUltimatePower_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("DisableUltimatePerformance.ps1", "Ultimate Performance");
-        }
-
-        private async void ChkHibernation_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("DisableHibernation.ps1", "Hibernation");
-        }
-
-        private async void ChkHibernation_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("EnableHibernation.ps1", "Hibernation");
-        }
-
-        private async void ChkFastStartup_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("DisableFastStartup.ps1", "Fast Startup");
-        }
-
-        private async void ChkFastStartup_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("EnableFastStartup.ps1", "Fast Startup");
-        }
-
-        #endregion
-
-        #region Event Handlers - Visual Effects
-
-        private async void ChkAnimations_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("DisableAnimations.ps1", "Window Animations");
-        }
-
-        private async void ChkAnimations_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("EnableAnimations.ps1", "Window Animations");
-        }
-
-        private async void ChkTransparency_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("DisableTransparency.ps1", "Transparency Effects");
-        }
-
-        private async void ChkTransparency_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("EnableTransparency.ps1", "Transparency Effects");
-        }
-
-        private async void ChkBestPerformance_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("SetBestPerformance.ps1", "Best Performance Mode");
-        }
-
-        private async void ChkBestPerformance_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("SetBestAppearance.ps1", "Best Appearance Mode");
-        }
-
-        #endregion
-
-        #region Event Handlers - Network
-
-        private async void ChkDNS_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("SetCloudflareDNS.ps1", "DNS Optimization");
-        }
-
-        private async void ChkDNS_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("ResetDNS.ps1", "DNS Reset");
-        }
-
-        private async void ChkTCP_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("OptimizeTCP.ps1", "TCP/IP Optimization");
-        }
-
-        private async void ChkTCP_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("ResetTCP.ps1", "TCP/IP Reset");
-        }
-
-        private async void ChkThrottle_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("DisableNetworkThrottle.ps1", "Network Throttling");
-        }
-
-        private async void ChkThrottle_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("EnableNetworkThrottle.ps1", "Network Throttling");
-        }
-
-        #endregion
-
-        #region Event Handlers - Gaming
-
-        private async void ChkGPUScheduling_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("EnableGPUScheduling.ps1", "GPU Scheduling");
-        }
-
-        private async void ChkGPUScheduling_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("DisableGPUScheduling.ps1", "GPU Scheduling");
-        }
-
-        private async void ChkFullscreen_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("DisableFullscreenOpt.ps1", "Fullscreen Optimizations");
-        }
-
-        private async void ChkFullscreen_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("EnableFullscreenOpt.ps1", "Fullscreen Optimizations");
-        }
-
-        private async void ChkMSI_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("EnableMSIMode.ps1", "MSI Mode");
-        }
-
-        private async void ChkMSI_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("DisableMSIMode.ps1", "MSI Mode");
-        }
-
-        #endregion
-
-        #region Event Handlers - Memory & Storage
-
-        private async void ChkSuperfetch_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("DisableSuperfetch.ps1", "Superfetch");
-        }
-
-        private async void ChkSuperfetch_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("EnableSuperfetch.ps1", "Superfetch");
-        }
-
-        private async void ChkPageFile_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("OptimizePageFile.ps1", "Virtual Memory");
-        }
-
-        private async void ChkPageFile_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("ResetPageFile.ps1", "Virtual Memory");
-        }
-
-        private async void ChkIndexing_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("DisableIndexing.ps1", "Search Indexing");
-        }
-
-        private async void ChkIndexing_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("EnableIndexing.ps1", "Search Indexing");
-        }
-
-        private async void ChkTRIM_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("EnableTRIM.ps1", "TRIM");
-        }
-
-        private async void ChkTRIM_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("DisableTRIM.ps1", "TRIM");
-        }
-
-        #endregion
-
-        #region Event Handlers - Privacy
-
-        private async void ChkTelemetry_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("DisableTelemetry.ps1", "Telemetry");
-        }
-
-        private async void ChkTelemetry_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("EnableTelemetry.ps1", "Telemetry");
-        }
-
-        private async void ChkBackgroundApps_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("DisableBackgroundApps.ps1", "Background Apps");
-        }
-
-        private async void ChkBackgroundApps_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("EnableBackgroundApps.ps1", "Background Apps");
-        }
-
-        private async void ChkCortana_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("DisableCortana.ps1", "Cortana");
-        }
-
-        private async void ChkCortana_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("EnableCortana.ps1", "Cortana");
-        }
-
-        private async void ChkTips_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("DisableWindowsTips.ps1", "Windows Tips");
-        }
-
-        private async void ChkTips_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("EnableWindowsTips.ps1", "Windows Tips");
-        }
-
-        #endregion
-
-        #region Event Handlers - Advanced
-
-        private async void ChkCPUPriority_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("OptimizeCPUPriority.ps1", "CPU Priority");
-        }
-
-        private async void ChkCPUPriority_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("ResetCPUPriority.ps1", "CPU Priority");
-        }
-
-        private async void ChkNagle_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("DisableNagle.ps1", "Nagle's Algorithm");
-        }
-
-        private async void ChkNagle_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("EnableNagle.ps1", "Nagle's Algorithm");
-        }
-
-        private async void ChkTimer_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("EnableHighPrecisionTimer.ps1", "High Precision Timer");
-        }
-
-        private async void ChkTimer_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("DisableHighPrecisionTimer.ps1", "High Precision Timer");
-        }
-
-        private async void ChkCoreParking_Checked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("DisableCoreParking.ps1", "Core Parking");
-        }
-
-        private async void ChkCoreParking_Unchecked(object sender, RoutedEventArgs e)
-        {
-            await ExecuteTweakScript("EnableCoreParking.ps1", "Core Parking");
         }
 
         #endregion
 
         #region Quick Action Buttons
 
-        private void BtnOptimizeAll_Click(object sender, RoutedEventArgs e)
+        private void BtnRecommended_Click(object sender, RoutedEventArgs e)
         {
-            // TODO: Apply all recommended tweaks
+            // Recommended preset: Safe, balanced optimizations for most users
+            
+            // System Tweaks
+            ChkGameMode.IsChecked = true;
+            ChkPowerPlan.IsChecked = true;
+            ChkUltimatePower.IsChecked = false;
+            ChkHibernation.IsChecked = true;
+            ChkFastStartup.IsChecked = true;
+
+            // Visual Effects - Keep some for better experience
+            ChkAnimations.IsChecked = false;
+            ChkTransparency.IsChecked = true;
+            ChkBestPerformance.IsChecked = false;
+
+            // Network
+            ChkDNS.IsChecked = true;
+            ChkTCP.IsChecked = true;
+            ChkThrottle.IsChecked = true;
+
+            // Gaming
+            ChkGPUScheduling.IsChecked = true;
+            ChkFullscreen.IsChecked = false;
+            ChkMSI.IsChecked = false;
+
+            // Memory & Storage
+            ChkSuperfetch.IsChecked = true;
+            ChkPageFile.IsChecked = false;
+            ChkIndexing.IsChecked = true;
+            ChkTRIM.IsChecked = true;
+
+            // Privacy
+            ChkTelemetry.IsChecked = true;
+            ChkBackgroundApps.IsChecked = true;
+            ChkCortana.IsChecked = true;
+            ChkTips.IsChecked = true;
+
+            // Advanced - None for safety
+            ChkCPUPriority.IsChecked = false;
+            ChkNagle.IsChecked = false;
+            ChkTimer.IsChecked = false;
+            ChkCoreParking.IsChecked = false;
         }
 
-        private void BtnClearRAM_Click(object sender, RoutedEventArgs e)
+        private void BtnMinimum_Click(object sender, RoutedEventArgs e)
         {
-            // TODO: Clear RAM cache
+            // Minimum preset: Only essential, safest optimizations
+    
+            // System Tweaks
+            ChkGameMode.IsChecked = false;
+            ChkPowerPlan.IsChecked = false;
+            ChkUltimatePower.IsChecked = false;
+            ChkHibernation.IsChecked = false;
+            ChkFastStartup.IsChecked = false;
+
+            // Visual Effects - Keep all for user experience
+            ChkAnimations.IsChecked = false;
+            ChkTransparency.IsChecked = false;
+            ChkBestPerformance.IsChecked = false;
+
+            // Network
+            ChkDNS.IsChecked = true;
+            ChkTCP.IsChecked = false;
+            ChkThrottle.IsChecked = true;
+
+            // Gaming
+            ChkGPUScheduling.IsChecked = false;
+            ChkFullscreen.IsChecked = false;
+            ChkMSI.IsChecked = false;
+
+            // Memory & Storage
+            ChkSuperfetch.IsChecked = false;
+            ChkPageFile.IsChecked = false;
+            ChkIndexing.IsChecked = false;
+            ChkTRIM.IsChecked = true;
+
+            // Privacy
+            ChkTelemetry.IsChecked = true;
+            ChkBackgroundApps.IsChecked = true;
+            ChkCortana.IsChecked = false;
+            ChkTips.IsChecked = true;
+
+            // Advanced - None
+            ChkCPUPriority.IsChecked = false;
+            ChkNagle.IsChecked = false;
+            ChkTimer.IsChecked = false;
+            ChkCoreParking.IsChecked = false;
         }
 
-        private void BtnResetTweaks_Click(object sender, RoutedEventArgs e)
+        private void BtnGaming_Click(object sender, RoutedEventArgs e)
         {
-            // TODO: Reset all tweaks to default
+            // Gaming preset: Maximum performance for gaming
+    
+            // System Tweaks - All performance options
+            ChkGameMode.IsChecked = true;
+            ChkPowerPlan.IsChecked = true;
+            ChkUltimatePower.IsChecked = true;
+            ChkHibernation.IsChecked = true;
+            ChkFastStartup.IsChecked = true;
+
+            // Visual Effects - Disable all for maximum FPS
+            ChkAnimations.IsChecked = true;
+            ChkTransparency.IsChecked = true;
+            ChkBestPerformance.IsChecked = true;
+
+            // Network - All optimizations
+            ChkDNS.IsChecked = true;
+            ChkTCP.IsChecked = true;
+            ChkThrottle.IsChecked = true;
+
+            // Gaming - All gaming optimizations
+            ChkGPUScheduling.IsChecked = true;
+            ChkFullscreen.IsChecked = true;
+            ChkMSI.IsChecked = true;
+
+            // Memory & Storage - All optimizations
+            ChkSuperfetch.IsChecked = true;
+            ChkPageFile.IsChecked = true;
+            ChkIndexing.IsChecked = true;
+            ChkTRIM.IsChecked = true;
+
+            // Privacy - All for performance
+            ChkTelemetry.IsChecked = true;
+            ChkBackgroundApps.IsChecked = true;
+            ChkCortana.IsChecked = true;
+            ChkTips.IsChecked = true;
+
+            // Advanced - All gaming-related tweaks
+            ChkCPUPriority.IsChecked = true;
+            ChkNagle.IsChecked = true;
+            ChkTimer.IsChecked = true;
+            ChkCoreParking.IsChecked = true;
         }
 
         #endregion
     }
-}
+
+    #region Restore Point Warning Dialog
+
+    public partial class RestorePointWarningDialog : Window
+    {
+        public PerformancePage.RestorePointDialogResult Result { get; private set; } = PerformancePage.RestorePointDialogResult.Cancel;
+        private string _language;
+
+        public RestorePointWarningDialog(string language)
+        {
+            _language = language;
+            InitializeComponent();
+            SetupUI();
+        }
+
+        private void InitializeComponent()
+        {
+            Width = 500;
+            Height = 280;
+            WindowStyle = WindowStyle.None;
+            ResizeMode = ResizeMode.NoResize;
+            WindowStartupLocation = WindowStartupLocation.CenterOwner;
+            Background = new SolidColorBrush(Color.FromRgb(15, 20, 25));
+            AllowsTransparency = true;
+
+            var mainBorder = new Border
+            {
+                BorderBrush = new SolidColorBrush(Color.FromRgb(25, 144, 254)),
+                BorderThickness = new Thickness(2, 2, 2, 2),
+                CornerRadius = new CornerRadius(16),
+                Padding = new Thickness(30, 30, 30, 30)
+            };
+
+            var stackPanel = new StackPanel();
+
+            var headerPanel = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(0, 0, 0, 20)
+            };
+
+            var icon = new TextBlock
+            {
+                Text = "⚠️",
+                FontSize = 32,
+                Margin = new Thickness(0, 0, 15, 0)
+            };
+
+            var title = new TextBlock
+            {
+                Text = _language == "PT" ? "Ponto de Restauração Recomendado" : "Restore Point Recommended",
+                FontSize = 20,
+                FontWeight = FontWeights.Bold,
+                Foreground = Brushes.White,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            headerPanel.Children.Add(icon);
+            headerPanel.Children.Add(title);
+
+            var message = new TextBlock
+            {
+                Text = _language == "PT"
+                    ? "É altamente recomendado criar um ponto de restauração antes de aplicar otimizações ao sistema.\n\nIsso permite reverter as mudanças caso algo não funcione como esperado."
+                    : "It is highly recommended to create a restore point before applying system optimizations.\n\nThis allows you to revert changes if something doesn't work as expected.",
+                FontSize = 14,
+                Foreground = new SolidColorBrush(Color.FromRgb(156, 163, 175)),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 30)
+            };
+
+            var buttonPanel = new UniformGrid
+            {
+                Rows = 1,
+                Columns = 3,
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+
+            var btnCreateAndOptimize = CreateButton(
+                _language == "PT" ? "Criar e Otimizar" : "Create & Optimize",
+                new SolidColorBrush(Color.FromRgb(16, 185, 129))
+            );
+            btnCreateAndOptimize.Click += (s, e) =>
+            {
+                Result = PerformancePage.RestorePointDialogResult.CreateAndOptimize;
+                Close();
+            };
+
+            var btnOptimizeOnly = CreateButton(
+                _language == "PT" ? "Só Otimizar" : "Optimize Only",
+                new SolidColorBrush(Color.FromRgb(245, 158, 11))
+            );
+            btnOptimizeOnly.Click += (s, e) =>
+            {
+                Result = PerformancePage.RestorePointDialogResult.OptimizeWithoutRestore;
+                Close();
+            };
+
+            var btnCancel = CreateButton(
+                _language == "PT" ? "Cancelar" : "Cancel",
+                new SolidColorBrush(Color.FromRgb(107, 114, 128))
+            );
+            btnCancel.Click += (s, e) =>
+            {
+                Result = PerformancePage.RestorePointDialogResult.Cancel;
+                Close();
+            };
+
+            buttonPanel.Children.Add(btnCreateAndOptimize);
+            buttonPanel.Children.Add(btnOptimizeOnly);
+            buttonPanel.Children.Add(btnCancel);
+
+            stackPanel.Children.Add(headerPanel);
+            stackPanel.Children.Add(message);
+            stackPanel.Children.Add(buttonPanel);
+
+            mainBorder.Child = stackPanel;
+            Content = mainBorder;
+        }
+
+        private Button CreateButton(string text, Brush background)
+        {
+            var button = new Button
+            {
+                Content = text,
+                Background = background,
+                Foreground = Brushes.White,
+                BorderThickness = new Thickness(0, 0, 0, 0),
+                Padding = new Thickness(15, 10, 15, 10),
+                Margin = new Thickness(5, 0, 5, 0),
+                FontSize = 13,
+                FontWeight = FontWeights.SemiBold,
+                Cursor = Cursors.Hand
+            };
+
+            var template = new ControlTemplate(typeof(Button));
+            var factory = new FrameworkElementFactory(typeof(Border));
+            factory.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Button.BackgroundProperty));
+            factory.SetValue(Border.CornerRadiusProperty, new CornerRadius(8));
+            factory.SetValue(Border.PaddingProperty, new TemplateBindingExtension(Button.PaddingProperty));
+
+            var contentFactory = new FrameworkElementFactory(typeof(ContentPresenter));
+            contentFactory.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            contentFactory.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+            factory.AppendChild(contentFactory);
+
+            template.VisualTree = factory;
+            button.Template = template;
+
+            return button;
+        }
+
+        private void SetupUI()
+        {
+            Result = PerformancePage.RestorePointDialogResult.Cancel;
+        }
+
+    }
+    }
+
+    #endregion

@@ -245,25 +245,45 @@
                     <StackPanel>
                         <TextBlock x:Name="TxtQuickActions" Text="⚡ Quick Actions" FontSize="18" FontWeight="Bold" Foreground="{StaticResource TextPrimary}" Margin="0,0,0,20"/>
 
-                        <UniformGrid Rows="1" Columns="3">
-                            <Button x:Name="BtnOptimizeAll" Style="{StaticResource ActionButton}" Margin="0,0,8,0">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="🚀" FontSize="20" Margin="0,0,8,0"/>
-                                    <TextBlock x:Name="TxtOptimizeAll" Text="Optimize All"/>
+                        <!-- Main Optimize Button -->
+                        <Button x:Name="BtnOptimize" Style="{StaticResource ActionButton}" Margin="0,0,0,20" Click="BtnOptimize_Click" Height="55">
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                <TextBlock Text="⚡" FontSize="28" Margin="0,0,15,0" VerticalAlignment="Center"/>
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock x:Name="TxtOptimize" Text="OPTIMIZE SELECTED" FontSize="16" FontWeight="Bold" TextAlignment="Left"/>
+                                    <TextBlock x:Name="TxtOptimizeDesc" Text="Apply all selected tweaks" FontSize="11" Opacity="0.8" TextAlignment="Left" Margin="0,2,0,0"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Button>
+
+                        <!-- Preset Buttons Row -->
+                        <TextBlock x:Name="TxtPresets" Text="Quick Presets" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}" Margin="0,0,0,12"/>
+                        
+                        <UniformGrid Rows="1" Columns="3" Margin="0,0,0,0">
+                            <!-- Recommended Preset -->
+                            <Button x:Name="BtnRecommended" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0" Click="BtnRecommended_Click" Height="90" Padding="8,12">
+                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <TextBlock Text="⭐" FontSize="24" HorizontalAlignment="Center" Margin="0,0,0,6"/>
+                                    <TextBlock x:Name="TxtRecommended" Text="Recommended" FontSize="13" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                                    <TextBlock x:Name="TxtRecommendedDesc" Text="Balanced optimization" FontSize="10" Opacity="0.7" HorizontalAlignment="Center" Margin="0,3,0,0" TextWrapping="Wrap" TextAlignment="Center"/>
                                 </StackPanel>
                             </Button>
 
-                            <Button x:Name="BtnClearRAM" Style="{StaticResource SecondaryButton}" Margin="4,0">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="💾" FontSize="20" Margin="0,0,8,0"/>
-                                    <TextBlock x:Name="TxtClearRAM" Text="Clear RAM"/>
+                            <!-- Minimum Preset -->
+                            <Button x:Name="BtnMinimum" Style="{StaticResource SecondaryButton}" Margin="4,0" Click="BtnMinimum_Click" Height="80" Padding="12,10">
+                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <TextBlock Text="🔹" FontSize="22" HorizontalAlignment="Center" Margin="0,0,0,4"/>
+                                    <TextBlock x:Name="TxtMinimum" Text="Minimum" FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                                    <TextBlock x:Name="TxtMinimumDesc" Text="Light tweaks only" FontSize="10" Opacity="0.7" HorizontalAlignment="Center" Margin="0,2,0,0" TextWrapping="Wrap" TextAlignment="Center"/>
                                 </StackPanel>
                             </Button>
 
-                            <Button x:Name="BtnResetTweaks" Style="{StaticResource SecondaryButton}" Margin="8,0,0,0">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="🔄" FontSize="20" Margin="0,0,8,0"/>
-                                    <TextBlock x:Name="TxtResetTweaks" Text="Reset All"/>
+                            <!-- Gaming Preset -->
+                            <Button x:Name="BtnGaming" Style="{StaticResource SecondaryButton}" Margin="8,0,0,0" Click="BtnGaming_Click" Height="70">
+                                <StackPanel HorizontalAlignment="Center">
+                                    <TextBlock Text="🎮" FontSize="24" HorizontalAlignment="Center" Margin="0,0,0,4"/>
+                                    <TextBlock x:Name="TxtGamingBtn" Text="Gaming" FontSize="13" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                                    <TextBlock x:Name="TxtGamingBtnDesc" Text="Maximum performance" FontSize="10" Opacity="0.7" HorizontalAlignment="Center" Margin="0,2,0,0"/>
                                 </StackPanel>
                             </Button>
                         </UniformGrid>
@@ -404,7 +424,7 @@
                             <CheckBox x:Name="ChkTransparency" Grid.Column="1" Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center"/>
                         </Grid>
 
-                        <Rectangle Height="1" Fill="#1A1F2E" Margin="0,0,0,20"/>
+                        <Rectangle Height="1" Fill="#1F2E" Margin="0,0,0,20"/>
 
                         <!-- Best Performance Mode -->
                         <Grid>
@@ -490,7 +510,7 @@
                         </TransformGroup>
                     </Border.RenderTransform>
                     <StackPanel>
-                        <TextBlock x:Name="TxtGaming" Text="🎮 Gaming Optimization" FontSize="18" FontWeight="Bold" Foreground="{StaticResource TextPrimary}" Margin="0,0,0,20"/>
+                        <TextBlock x:Name="TxtGamingTitle" Text="🎮 Gaming Optimization" FontSize="18" FontWeight="Bold" Foreground="{StaticResource TextPrimary}" Margin="0,0,0,20"/>
 
                         <!-- Hardware Accelerated GPU Scheduling -->
                         <Grid Margin="0,0,0,20">
@@ -641,7 +661,7 @@
                             <CheckBox x:Name="ChkTelemetry" Grid.Column="1" Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center"/>
                         </Grid>
 
-                        <Rectangle Height="1" Fill="#1A1F2E" Margin="0,0,0,20"/>
+                        <Rectangle Height="1" Fill="#1F2E" Margin="0,0,0,20"/>
 
                         <!-- Background Apps -->
                         <Grid Margin="0,0,0,20">
@@ -656,7 +676,7 @@
                             <CheckBox x:Name="ChkBackgroundApps" Grid.Column="1" Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center"/>
                         </Grid>
 
-                        <Rectangle Height="1" Fill="#1A1F2E" Margin="0,0,0,20"/>
+                        <Rectangle Height="1" Fill="#1F2E" Margin="0,0,0,20"/>
 
                         <!-- Cortana -->
                         <Grid Margin="0,0,0,20">
@@ -671,7 +691,7 @@
                             <CheckBox x:Name="ChkCortana" Grid.Column="1" Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center"/>
                         </Grid>
 
-                        <Rectangle Height="1" Fill="#1A1F2E" Margin="0,0,0,20"/>
+                        <Rectangle Height="1" Fill="#1F2E" Margin="0,0,0,20"/>
 
                         <!-- Windows Tips -->
                         <Grid>
@@ -719,7 +739,7 @@
                             <CheckBox x:Name="ChkCPUPriority" Grid.Column="1" Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center"/>
                         </Grid>
 
-                        <Rectangle Height="1" Fill="#1A1F2E" Margin="0,0,0,20"/>
+                        <Rectangle Height="1" Fill="#1F2E" Margin="0,0,0,20"/>
 
                         <!-- Nagle's Algorithm -->
                         <Grid Margin="0,0,0,20">
@@ -734,7 +754,7 @@
                             <CheckBox x:Name="ChkNagle" Grid.Column="1" Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center"/>
                         </Grid>
 
-                        <Rectangle Height="1" Fill="#1A1F2E" Margin="0,0,0,20"/>
+                        <Rectangle Height="1" Fill="#1F2E" Margin="0,0,0,20"/>
 
                         <!-- Timer Resolution -->
                         <Grid Margin="0,0,0,20">
@@ -749,7 +769,7 @@
                             <CheckBox x:Name="ChkTimer" Grid.Column="1" Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center"/>
                         </Grid>
 
-                        <Rectangle Height="1" Fill="#1A1F2E" Margin="0,0,0,20"/>
+                        <Rectangle Height="1" Fill="#1F2E" Margin="0,0,0,20"/>
 
                         <!-- Core Parking -->
                         <Grid>
