@@ -615,7 +615,8 @@ namespace Nexor
                 ProcessStartInfo psi = new ProcessStartInfo
                 {
                     FileName = "powershell.exe",
-                    Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{scriptPath}\"",
+                    // Add -Unattended flag for full automation
+                    Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{scriptPath}\" -Unattended",
                     UseShellExecute = false,
                     CreateNoWindow = false,
                     WindowStyle = ProcessWindowStyle.Normal
@@ -627,11 +628,8 @@ namespace Nexor
 
                     int exitCode = process.ExitCode;
 
-                    try
-                    {
-                        CleanSoftwareDistribution();
-                    }
-                    catch { }
+                    // No longer call CleanSoftwareDistribution here
+                    // The PowerShell script handles EVERYTHING including cleanup and restarts
 
                     if (exitCode == 0)
                     {
@@ -639,7 +637,9 @@ namespace Nexor
                         {
                             ShowNotification(
                                 _currentLanguage == "PT" ? "Sucesso!" : "Success!",
-                                _currentLanguage == "PT" ? "Atualização concluída!" : "Update completed!",
+                                _currentLanguage == "PT" 
+                                    ? "Atualização concluída! O PC foi totalmente atualizado de forma autônoma." 
+                                    : "Update completed! PC has been fully updated autonomously.",
                                 "✅",
                                 (SolidColorBrush)FindResource("AccentGreen")
                             );
@@ -652,8 +652,22 @@ namespace Nexor
                             await ShowModernDialog(
                                 _currentLanguage == "PT" ? "Erro" : "Error",
                                 _currentLanguage == "PT"
-                                    ? "O programa precisa de privilégios de Administrador!"
-                                    : "The program needs Administrator privileges!",
+                                    ? "O programa precisa de privilégios de Administrador!\n\nClique com o botão direito no programa e selecione 'Executar como Administrador'."
+                                    : "The program needs Administrator privileges!\n\nRight-click the program and select 'Run as Administrator'.",
+                                "⚠️",
+                                DialogType.OK
+                            );
+                        });
+                    }
+                    else
+                    {
+                        Dispatcher.Invoke(async () =>
+                        {
+                            await ShowModernDialog(
+                                _currentLanguage == "PT" ? "Aviso" : "Warning",
+                                _currentLanguage == "PT"
+                                    ? $"O script foi concluído com avisos (código: {exitCode}).\n\nVerifique o ficheiro de log no Ambiente de Trabalho para mais detalhes."
+                                    : $"Script completed with warnings (code: {exitCode}).\n\nCheck the log file on Desktop for details.",
                                 "⚠️",
                                 DialogType.OK
                             );
@@ -667,7 +681,7 @@ namespace Nexor
                 {
                     await ShowModernDialog(
                         "Error",
-                        $"Error: {ex.Message}",
+                        $"Failed to run PowerShell script:\n\n{ex.Message}",
                         "❌",
                         DialogType.OK
                     );
@@ -675,7 +689,7 @@ namespace Nexor
             }
         }
 
-        private void CleanSoftwareDistribution()
+        private async void CleanSoftwareDistribution()
         {
             string path = @"C:\Windows\SoftwareDistribution\Download";
             if (!Directory.Exists(path))
@@ -698,14 +712,46 @@ namespace Nexor
                 using (Process process = Process.Start(psi))
                 {
                     process?.WaitForExit();
+                    
+                    if (process?.ExitCode != 0)
+                    {
+                        throw new Exception($"Cleanup failed with exit code: {process.ExitCode}");
+                    }
                 }
 
                 System.Threading.Thread.Sleep(2000);
-                RestartComputer();
+                
+                // Ask user before restarting
+                bool shouldRestart = await ShowModernDialog(
+                    _currentLanguage == "PT" ? "Reiniciar Computador?" : "Restart Computer?",
+                    _currentLanguage == "PT" 
+                        ? "A limpeza foi concluída. O computador precisa ser reiniciado.\n\nDeseja reiniciar agora?" 
+                        : "Cleanup completed. Computer needs to restart.\n\nRestart now?",
+                    "🔄",
+                    DialogType.YesNo
+                );
+
+                if (shouldRestart)
+                {
+                    RestartComputer();
+                }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error during cleanup: {ex.Message}");
+                // Show user-friendly error message
+                await Dispatcher.InvokeAsync(async () =>
+                {
+                    await ShowModernDialog(
+                        _currentLanguage == "PT" ? "Erro na Limpeza" : "Cleanup Error",
+                        _currentLanguage == "PT"
+                            ? $"Ocorreu um erro durante a limpeza:\n\n{ex.Message}\n\nTente executar o programa como Administrador."
+                            : $"An error occurred during cleanup:\n\n{ex.Message}\n\nTry running the program as Administrator.",
+                        "❌",
+                        DialogType.OK
+                    );
+                });
+                
+                // Try to restart services even on failure
                 try
                 {
                     StartWindowsUpdateService();
@@ -716,14 +762,42 @@ namespace Nexor
 
         private void RestartComputer()
         {
-            ProcessStartInfo psi = new ProcessStartInfo
+            try
             {
-                FileName = "shutdown.exe",
-                Arguments = "/r /t 10 /c \"Restarting after Windows Update cleanup...\"",
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-            Process.Start(psi);
+                ProcessStartInfo psi = new ProcessStartInfo
+                {
+                    FileName = "shutdown.exe",
+                    Arguments = "/r /t 30 /c \"Nexor: Restarting after Windows Update cleanup... (Cancel with: shutdown /a)\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                Process.Start(psi);
+                
+                // Show notification
+                Dispatcher.Invoke(() =>
+                {
+                    ShowNotification(
+                        _currentLanguage == "PT" ? "Reiniciando..." : "Restarting...",
+                        _currentLanguage == "PT" 
+                            ? "O computador será reiniciado em 30 segundos.\nPara cancelar: abra CMD e digite 'shutdown /a'" 
+                            : "Computer will restart in 30 seconds.\nTo cancel: open CMD and type 'shutdown /a'",
+                        "🔄",
+                        (SolidColorBrush)FindResource("AccentOrange")
+                    );
+                });
+            }
+            catch (Exception ex)
+            {
+                Dispatcher.Invoke(async () =>
+                {
+                    await ShowModernDialog(
+                        "Error",
+                        $"Failed to schedule restart: {ex.Message}",
+                        "❌",
+                        DialogType.OK
+                    );
+                });
+            }
         }
 
         private void StopWindowsUpdateService()

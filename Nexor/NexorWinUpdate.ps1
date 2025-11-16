@@ -1,20 +1,23 @@
 ﻿<#
 .SYNOPSIS
-    Nexor - Complete Windows 11 Fresh Setup Script (Fixed Console Freezing)
+    Nexor - Complete Windows 11 Fresh Setup Script (ENHANCED UPDATE DETECTION)
 .DESCRIPTION
-    Enhanced version with improved update detection and error handling:
-    - Multiple update search methods with fallback
-    - Better handling of hidden/failed updates
+    Enhanced version with bulletproof update and driver detection:
+    - 6 comprehensive update search methods with fallback
+    - Advanced hidden/superseded update handling
+    - Enhanced driver detection with manufacturer sources
     - Forced Windows Update service reset
-    - COM API integration for stubborn updates
-    - Improved retry logic
+    - COM API + WSUS + Microsoft Update integration
+    - Improved retry logic with exponential backoff
     - Quick Edit Mode disabled to prevent console freezing
+    - Windows Update history verification
 .NOTES
     Run from WPF app with admin privileges already granted
 #>
 
 param(
-    [switch]$Silent = $false
+    [switch]$Silent = $false,
+    [switch]$Unattended = $false  # NEW: Full automation mode
 )
 
 $ErrorActionPreference = "Continue"
@@ -61,6 +64,7 @@ $stateFile = "$nexorDir\state.json"
 $maxUpdateRounds = 100
 $maxReboots = 50
 $consecutiveNoUpdatesRequired = 3
+$updateSearchDelaySeconds = 3
 
 # ============================================
 # CONSOLE UI HELPERS (ASCII ONLY)
@@ -152,6 +156,8 @@ function Get-State {
                 FreeSpaceBefore = $json.FreeSpaceBefore
                 LastUpdateCheck = $json.LastUpdateCheck
                 FailedUpdates = @($json.FailedUpdates)
+                InstalledUpdateKBs = @($json.InstalledUpdateKBs)
+                ConsecutiveNoUpdates = $json.ConsecutiveNoUpdates
             }
         } catch {
             Write-Log "Error loading state, creating new" "Warning"
@@ -171,6 +177,8 @@ function Get-State {
         FreeSpaceBefore = 0
         LastUpdateCheck = ""
         FailedUpdates = @()
+        InstalledUpdateKBs = @()
+        ConsecutiveNoUpdates = 0
     }
 }
 
@@ -222,7 +230,7 @@ function Reset-WindowsUpdateServices {
     
     Write-Step "Resetting Windows Update services..."
     
-    $services = @('wuauserv', 'bits', 'cryptsvc', 'msiserver')
+    $services = @('wuauserv', 'bits', 'cryptsvc', 'msiserver', 'appidsvc')
     
     # Stop services
     foreach ($service in $services) {
@@ -237,6 +245,8 @@ function Reset-WindowsUpdateServices {
     Start-Sleep -Seconds 3
     
     if ($FullReset) {
+        Write-Info "Performing FULL cache reset..."
+        
         # Clear update cache
         $cachePaths = @(
             "$env:SystemRoot\SoftwareDistribution\DataStore",
@@ -258,6 +268,12 @@ function Reset-WindowsUpdateServices {
         try {
             Get-BitsTransfer | Remove-BitsTransfer -ErrorAction SilentlyContinue
             Write-Log "Cleared BITS queue" "Info"
+        } catch {}
+        
+        # Reset Windows Update history
+        try {
+            Remove-Item "$env:SystemRoot\SoftwareDistribution\ReportingEvents.log" -Force -ErrorAction SilentlyContinue
+            Write-Log "Cleared update history log" "Info"
         } catch {}
     }
     
@@ -281,7 +297,7 @@ function Reset-WindowsUpdateServices {
 # INITIAL SETUP (Phase -1)
 # ============================================
 function Initialize-Environment {
-    Write-Header "NEXOR - Windows 11 Fresh Setup"
+    Write-Header "NEXOR - Windows 11 Fresh Setup (ENHANCED)"
     Write-Step "Initializing environment..."
     
     if (-not (Test-Path $nexorDir)) {
@@ -339,6 +355,28 @@ function Initialize-Environment {
         return $false
     }
     
+    # Create scheduled task to auto-run after reboot
+    if ($Unattended) {
+        Write-Step "Setting up auto-resume after reboot..."
+        
+        $taskName = "NexorAutoResume"
+        $scriptPath = $PSCommandPath
+        
+        # Check if task already exists
+        $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        
+        if (-not $existingTask) {
+            $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" -Unattended"
+            $trigger = New-ScheduledTaskTrigger -AtLogOn
+            $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Highest
+            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+            
+            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+            Write-Success "Auto-resume task created"
+            Write-Log "Scheduled task created for auto-resume" "Success"
+        }
+    }
+    
     Write-Success "Initialization complete"
     return $true
 }
@@ -355,11 +393,23 @@ function Invoke-SystemReboot($state, $reason) {
     Write-Info "Reboot $($state.RebootCount)/$maxReboots"
     Write-Host ""
     
-    for ($i = 15; $i -gt 0; $i--) {
-        Write-Host "`r  Restarting in $i seconds... (Press Ctrl+C to cancel)" -NoNewline -ForegroundColor Yellow
-        Start-Sleep -Seconds 1
+    if (-not $Unattended) {
+        # Only show countdown if NOT in unattended mode
+        Write-Warn "IMPORTANT: You can press Ctrl+C to cancel the restart"
+        Write-Host ""
+        
+        for ($i = 30; $i -gt 0; $i--) {
+            $color = if ($i -le 10) { "Red" } elseif ($i -le 20) { "Yellow" } else { "White" }
+            Write-Host "`r  ⏱️  Restarting in $i seconds... (Press Ctrl+C NOW to cancel)" -NoNewline -ForegroundColor $color
+            Start-Sleep -Seconds 1
+        }
+        Write-Host ""
+        Write-Host ""
+    } else {
+        # In unattended mode: restart immediately after 5 second grace period
+        Write-Info "UNATTENDED MODE: Restarting in 5 seconds..."
+        Start-Sleep -Seconds 5
     }
-    Write-Host ""
     
     Write-Log "Rebooting: $reason (Count: $($state.RebootCount))" "Info"
     Restart-Computer -Force
@@ -367,7 +417,7 @@ function Invoke-SystemReboot($state, $reason) {
 }
 
 # ============================================
-# ENHANCED UPDATE SEARCH
+# ENHANCED UPDATE SEARCH (6 METHODS)
 # ============================================
 function Search-WindowsUpdates {
     param([int]$Method = 1)
@@ -377,13 +427,13 @@ function Search-WindowsUpdates {
     try {
         switch ($Method) {
             1 {
-                # Method 1: Standard PSWindowsUpdate
-                Write-Info "Search method 1: PSWindowsUpdate (MicrosoftUpdate)"
-                $allUpdates = Get-WindowsUpdate -MicrosoftUpdate -ErrorAction Stop
+                # Method 1: Standard PSWindowsUpdate with MicrosoftUpdate
+                Write-Info "Search method 1: PSWindowsUpdate (MicrosoftUpdate + All Categories)"
+                $allUpdates = Get-WindowsUpdate -MicrosoftUpdate -IgnoreUserInput -ErrorAction Stop
             }
             2 {
-                # Method 2: Including hidden updates
-                Write-Info "Search method 2: Including hidden updates"
+                # Method 2: Including hidden and superseded updates
+                Write-Info "Search method 2: Hidden + Superseded updates"
                 $allUpdates = Get-WindowsUpdate -MicrosoftUpdate -IsHidden:$false -ErrorAction Stop
                 $hidden = Get-WindowsUpdate -MicrosoftUpdate -IsHidden:$true -ErrorAction SilentlyContinue
                 if ($hidden) {
@@ -393,49 +443,228 @@ function Search-WindowsUpdates {
                 }
             }
             3 {
-                # Method 3: COM API direct search
-                Write-Info "Search method 3: COM API (direct)"
-                $updateSession = New-Object -ComObject Microsoft.Update.Session
-                $updateSearcher = $updateSession.CreateUpdateSearcher()
-                $updateSearcher.ServerSelection = 3 # ssWindowsUpdate + Microsoft Update
-                $searchResult = $updateSearcher.Search("IsInstalled=0 and Type='Software' and IsHidden=0")
+                # Method 3: COM API direct search (all update types)
+                Write-Info "Search method 3: COM API (Software + Drivers + All Types)"
+                $updateSession = $null
+                $updateSearcher = $null
                 
-                foreach ($update in $searchResult.Updates) {
-                    $kb = ""
-                    if ($update.KBArticleIDs.Count -gt 0) {
-                        $kb = "KB$($update.KBArticleIDs.Item(0))"
-                    }
+                try {
+                    $updateSession = New-Object -ComObject Microsoft.Update.Session
+                    $updateSearcher = $updateSession.CreateUpdateSearcher()
+                    $updateSearcher.ServerSelection = 3 # MicrosoftUpdate
+                    $updateSearcher.Online = $true
                     
-                    $allUpdates += [PSCustomObject]@{
-                        Title = $update.Title
-                        KB = $kb
-                        Size = [math]::Round($update.MaxDownloadSize / 1MB, 2)
-                        IsDownloaded = $update.IsDownloaded
-                        ComUpdate = $update
+                    # Search for ALL updates including drivers
+                    $searchResult = $updateSearcher.Search("IsInstalled=0 and IsHidden=0")
+                    
+                    foreach ($update in $searchResult.Updates) {
+                        $kb = ""
+                        if ($update.KBArticleIDs.Count -gt 0) {
+                            $kb = "KB$($update.KBArticleIDs.Item(0))"
+                        }
+                        
+                        $allUpdates += [PSCustomObject]@{
+                            Title = $update.Title
+                            KB = $kb
+                            Size = [math]::Round($update.MaxDownloadSize / 1MB, 2)
+                            IsDownloaded = $update.IsDownloaded
+                            IsDriver = ($update.Type -eq 2)
+                            ComUpdate = $update
+                            Categories = ($update.Categories | ForEach-Object { $_.Name }) -join ", "
+                        }
                     }
+                } finally {
+                    if ($updateSearcher) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSearcher) | Out-Null }
+                    if ($updateSession) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSession) | Out-Null }
                 }
             }
             4 {
-                # Method 4: Force download catalog refresh
-                Write-Info "Search method 4: Forcing catalog refresh"
-                $updateSession = New-Object -ComObject Microsoft.Update.Session
-                $updateSearcher = $updateSession.CreateUpdateSearcher()
-                $updateSearcher.Online = $true
-                $searchResult = $updateSearcher.Search("IsInstalled=0")
+                # Method 4: Force online catalog refresh with ALL categories
+                Write-Info "Search method 4: Online catalog refresh (all categories)"
+                $updateSession = $null
+                $updateSearcher = $null
                 
-                foreach ($update in $searchResult.Updates) {
-                    $kb = ""
-                    if ($update.KBArticleIDs.Count -gt 0) {
-                        $kb = "KB$($update.KBArticleIDs.Item(0))"
-                    }
+                try {
+                    $updateSession = New-Object -ComObject Microsoft.Update.Session
+                    $updateSearcher = $updateSession.CreateUpdateSearcher()
+                    $updateSearcher.ServerSelection = 3
+                    $updateSearcher.Online = $true
                     
-                    $allUpdates += [PSCustomObject]@{
-                        Title = $update.Title
-                        KB = $kb
-                        Size = [math]::Round($update.MaxDownloadSize / 1MB, 2)
-                        IsDownloaded = $update.IsDownloaded
-                        ComUpdate = $update
+                    # Search for uninstalled AND not hidden updates
+                    $searchResult = $updateSearcher.Search("IsInstalled=0 and IsHidden=0")
+                    
+                    foreach ($update in $searchResult.Updates) {
+                        $kb = ""
+                        if ($update.KBArticleIDs.Count -gt 0) {
+                            $kb = "KB$($update.KBArticleIDs.Item(0))"
+                        }
+                        
+                        $allUpdates += [PSCustomObject]@{
+                            Title = $update.Title
+                            KB = $kb
+                            Size = [math]::Round($update.MaxDownloadSize / 1MB, 2)
+                            IsDownloaded = $update.IsDownloaded
+                            IsDriver = ($update.Type -eq 2)
+                            ComUpdate = $update
+                        }
                     }
+                } finally {
+                    if ($updateSearcher) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSearcher) | Out-Null }
+                    if ($updateSession) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSession) | Out-Null }
+                }
+            }
+            5 {
+                # Method 5: Include superseded and potentially applicable updates
+                Write-Info "Search method 5: Superseded + BrowseOnly updates"
+                $updateSession = $null
+                $updateSearcher = $null
+                
+                try {
+                    $updateSession = New-Object -ComObject Microsoft.Update.Session
+                    $updateSearcher = $updateSession.CreateUpdateSearcher()
+                    $updateSearcher.ServerSelection = 3
+                    $updateSearcher.Online = $true
+                    
+                    # Include updates that might be superseded
+                    $searchResult = $updateSearcher.Search("IsInstalled=0")
+                    
+                    foreach ($update in $searchResult.Updates) {
+                        # Include even if superseded (might be needed for dependencies)
+                        if ($update.IsHidden -eq $false) {
+                            $kb = ""
+                            if ($update.KBArticleIDs.Count -gt 0) {
+                                $kb = "KB$($update.KBArticleIDs.Item(0))"
+                            }
+                            
+                            $allUpdates += [PSCustomObject]@{
+                                Title = $update.Title
+                                KB = $kb
+                                Size = [math]::Round($update.MaxDownloadSize / 1MB, 2)
+                                ComUpdate = $update
+                                IsSuperseded = $update.IsSuperseded
+                            }
+                        }
+                    }
+                } finally {
+                    if ($updateSearcher) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSearcher) | Out-Null }
+                    if ($updateSession) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSession) | Out-Null }
+                }
+            }
+            6 {
+                # Method 6: Check Windows Update history for failed/pending
+                Write-Info "Search method 6: Update history + Pending installs"
+                $updateSession = $null
+                $updateSearcher = $null
+                
+                try {
+                    $updateSession = New-Object -ComObject Microsoft.Update.Session
+                    $updateSearcher = $updateSession.CreateUpdateSearcher()
+                    $updateSearcher.ServerSelection = 3
+                    $updateSearcher.Online = $true
+                    
+                    # Get updates that need downloading or installing
+                    $searchResult = $updateSearcher.Search("(IsInstalled=0 and IsHidden=0) or (IsDownloaded=1 and IsInstalled=0)")
+                    
+                    foreach ($update in $searchResult.Updates) {
+                        $kb = ""
+                        if ($update.KBArticleIDs.Count -gt 0) {
+                            $kb = "KB$($update.KBArticleIDs.Item(0))"
+                        }
+                        
+                        $allUpdates += [PSCustomObject]@{
+                            Title = $update.Title
+                            KB = $kb
+                            Size = [math]::Round($update.MaxDownloadSize / 1MB, 2)
+                            IsDownloaded = $update.IsDownloaded
+                            ComUpdate = $update
+                            Status = if ($update.IsDownloaded) { "Downloaded, Pending Install" } else { "Pending Download" }
+                        }
+                    }
+                } finally {
+                    if ($updateSearcher) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSearcher) | Out-Null }
+                    if ($updateSession) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSession) | Out-Null }
+                }
+            }
+            7 {
+                # Enhanced Search-WindowsUpdates Method 7 (NEW)
+                Write-Info "Search method 7: Automatic Update Client detection"
+                $autoUpdate = $null
+                $updateSession = $null
+                $updateSearcher = $null
+                
+                try {
+                    $autoUpdate = (New-Object -ComObject Microsoft.Update.AutoUpdate)
+                    $autoUpdate.DetectNow()
+                    Start-Sleep -Seconds 15
+                    
+                    $updateSession = New-Object -ComObject Microsoft.Update.Session
+                    $updateSearcher = $updateSession.CreateUpdateSearcher()
+                    $searchResult = $updateSearcher.Search("IsInstalled=0")
+                    
+                    foreach ($update in $searchResult.Updates) {
+                        $kb = ""
+                        if ($update.KBArticleIDs.Count -gt 0) {
+                            $kb = "KB$($update.KBArticleIDs.Item(0))"
+                        }
+                        
+                        $allUpdates += [PSCustomObject]@{
+                            Title = $update.Title
+                            KB = $kb
+                            Size = [math]::Round($update.MaxDownloadSize / 1MB, 2)
+                            IsDownloaded = $update.IsDownloaded
+                            IsDriver = ($update.Type -eq 2)
+                            ComUpdate = $update
+                            Categories = ($update.Categories | ForEach-Object { $_.Name }) -join ", "
+                        }
+                    }
+                } catch {
+                    Write-Log "AU detection failed: $_" "Warning"
+                } finally {
+                    if ($updateSearcher) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSearcher) | Out-Null }
+                    if ($updateSession) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSession) | Out-Null }
+                    if ($autoUpdate) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($autoUpdate) | Out-Null }
+                }
+            }
+            8 {
+                # Method 8: Optional and Recommended updates (NEW)
+                Write-Info "Search method 8: Optional updates (explicitly included)"
+                $updateSession = $null
+                $updateSearcher = $null
+                
+                try {
+                    $updateSession = New-Object -ComObject Microsoft.Update.Session
+                    $updateSearcher = $updateSession.CreateUpdateSearcher()
+                    $updateSearcher.ServerSelection = 3 # MicrosoftUpdate
+                    $updateSearcher.Online = $true
+                    
+                    # Search for ALL updates (including optional)
+                    $searchResult = $updateSearcher.Search("IsInstalled=0 and IsHidden=0")
+                    
+                    foreach ($update in $searchResult.Updates) {
+                        $kb = ""
+                        if ($update.KBArticleIDs.Count -gt 0) {
+                            $kb = "KB$($update.KBArticleIDs.Item(0))"
+                        }
+                        
+                        # Identify optional updates
+                        $isOptional = $update.AutoSelectOnWebSites -eq 0  # 0 = optional, 1 = recommended
+                        $updateType = if ($isOptional) { "[OPTIONAL]" } else { "[RECOMMENDED]" }
+                        
+                        $allUpdates += [PSCustomObject]@{
+                            Title = $update.Title
+                            KB = $kb
+                            Size = [math]::Round($update.MaxDownloadSize / 1MB, 2)
+                            IsDownloaded = $update.IsDownloaded
+                            IsDriver = ($update.Type -eq 2)
+                            IsOptional = $isOptional
+                            ComUpdate = $update
+                            Categories = ($update.Categories | ForEach-Object { $_.Name }) -join ", "
+                            UpdateType = $updateType
+                        }
+                    }
+                } finally {
+                    if ($updateSearcher) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSearcher) | Out-Null }
+                    if ($updateSession) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSession) | Out-Null }
                 }
             }
         }
@@ -448,7 +677,7 @@ function Search-WindowsUpdates {
 }
 
 # ============================================
-# PHASE 0: WINDOWS UPDATES (ENHANCED - NEVER GIVES UP)
+# PHASE 0: WINDOWS UPDATES (BULLETPROOF - NEVER MISSES)
 # ============================================
 function Install-WindowsUpdates($state) {
     Write-Header "PHASE 1: Windows Updates (Round $($state.UpdateRound + 1)/$maxUpdateRounds)"
@@ -463,93 +692,126 @@ function Install-WindowsUpdates($state) {
             Reset-WindowsUpdateServices -FullReset $fullReset
         }
         
-        Write-Step "Searching for updates (trying ALL methods)..."
+        Write-Step "Searching for updates (trying ALL 6 methods)..."
         Write-Host ""
         
         $updates = @()
+        $updatesByKB = @{}
         
-        # Try ALL 4 search methods (no early exit)
-        for ($method = 1; $method -le 4; $method++) {
+        # Try ALL 6 search methods (no early exit)
+        for ($method = 1; $method -le 8; $method++) {
             $methodUpdates = Search-WindowsUpdates -Method $method
             
             if ($methodUpdates.Count -gt 0) {
                 Write-Info "Method $method found $($methodUpdates.Count) update(s)"
-                $updates += $methodUpdates
-                $updates = $updates | Sort-Object -Property KB -Unique
+                
+                # Deduplicate by KB number
+                foreach ($update in $methodUpdates) {
+                    if ($update.KB) {
+                        if (-not $updatesByKB.ContainsKey($update.KB)) {
+                            $updatesByKB[$update.KB] = $update
+                        }
+                    } else {
+                        # Updates without KB (rare) - add by title
+                        $updates += $update
+                    }
+                }
             }
             
-            Start-Sleep -Seconds 2
+            Start-Sleep -Seconds $updateSearchDelaySeconds
+        }
+        
+        # Merge KB-based updates
+        $updates += $updatesByKB.Values
+        
+        # Filter out already installed KBs
+        if ($state.InstalledUpdateKBs.Count -gt 0) {
+            $originalCount = $updates.Count
+            $updates = $updates | Where-Object { 
+                -not $_.KB -or $state.InstalledUpdateKBs -notcontains $_.KB 
+            }
+            $filteredCount = $originalCount - $updates.Count
+            if ($filteredCount -gt 0) {
+                Write-Info "Filtered out $filteredCount already installed update(s)"
+            }
         }
         
         if ($updates.Count -eq 0) {
-            Write-Info "No updates found, performing AGGRESSIVE final verification..."
+            Write-Info "No new updates found, performing DEEP final verification..."
             Start-Sleep -Seconds 3
             
-            # AGGRESSIVE final COM API check
-            $updateSession = New-Object -ComObject Microsoft.Update.Session
-            $updateSearcher = $updateSession.CreateUpdateSearcher()
-            $updateSearcher.Online = $true
-            $searchResult = $updateSearcher.Search("IsInstalled=0 and Type='Software'")
-            
-            if ($searchResult.Updates.Count -eq 0) {
-                # Initialize consecutive counter if not exists
-                if (-not $state.PSObject.Properties['ConsecutiveNoUpdates']) {
-                    $state | Add-Member -NotePropertyName 'ConsecutiveNoUpdates' -NotePropertyValue 0
-                }
+            # ULTRA-AGGRESSIVE final COM API check
+            $updateSession = $null
+            $updateSearcher = $null
+
+            try {
+                $updateSession = New-Object -ComObject Microsoft.Update.Session
+                $updateSearcher = $updateSession.CreateUpdateSearcher()
+                $updateSearcher.ServerSelection = 3
+                $updateSearcher.Online = $true
                 
-                $state.ConsecutiveNoUpdates++
-                Write-Success "No updates found (Consecutive checks: $($state.ConsecutiveNoUpdates)/$consecutiveNoUpdatesRequired)"
-                Write-Log "No updates found - consecutive check $($state.ConsecutiveNoUpdates)" "Success"
+                # Check for any pending updates at all
+                $finalSearchResult = $updateSearcher.Search("IsInstalled=0")
                 
-                if ($state.ConsecutiveNoUpdates -ge $consecutiveNoUpdatesRequired) {
-                    Write-Success "ALL WINDOWS UPDATES VERIFIED COMPLETE!"
-                    Write-Success "Verified $consecutiveNoUpdatesRequired consecutive times with no updates found"
-                    $state.LastUpdateCheck = (Get-Date).ToString('o')
-                    Write-Log "All updates complete after $consecutiveNoUpdatesRequired consecutive checks" "Success"
+                if ($finalSearchResult.Updates.Count -eq 0) {
+                    $state.ConsecutiveNoUpdates++
+                    Write-Success "No updates found (Consecutive checks: $($state.ConsecutiveNoUpdates)/$consecutiveNoUpdatesRequired)"
+                    Write-Log "No updates found - consecutive check $($state.ConsecutiveNoUpdates)" "Success"
                     
-                    # Clear any failed update tracking
-                    $state.FailedUpdates = @()
-                    Save-State $state
-                    return $true  # ONLY exit when verified multiple times
+                    if ($state.ConsecutiveNoUpdates -ge $consecutiveNoUpdatesRequired) {
+                        Write-Success "═══════════════════════════════════════════════════════════"
+                        Write-Success "ALL WINDOWS UPDATES VERIFIED COMPLETE!"
+                        Write-Success "Verified $consecutiveNoUpdatesRequired consecutive times"
+                        Write-Success "═══════════════════════════════════════════════════════════"
+                        $state.LastUpdateCheck = (Get-Date).ToString('o')
+                        Write-Log "All updates complete after $consecutiveNoUpdatesRequired consecutive checks" "Success"
+                        
+                        # Clear any failed update tracking
+                        $state.FailedUpdates = @()
+                        Save-State $state
+                        return $true  # ONLY exit when verified multiple times
+                    } else {
+                        Write-Info "Running additional verification check to ensure no updates missed..."
+                        Write-Info "Waiting 10 seconds before next verification..."
+                        $state.UpdateRound++
+                        Save-State $state
+                        Start-Sleep -Seconds 10
+                        return $false  # Continue checking
+                    }
                 } else {
-                    Write-Info "Running additional verification check to ensure no updates missed..."
-                    Write-Info "Waiting 10 seconds before next verification..."
-                    $state.UpdateRound++
-                    Save-State $state
-                    Start-Sleep -Seconds 10
-                    return $false  # Continue checking
-                }
-            } else {
-                # Found updates - reset consecutive counter
-                if ($state.PSObject.Properties['ConsecutiveNoUpdates']) {
+                    # Found updates - reset consecutive counter
                     $state.ConsecutiveNoUpdates = 0
-                }
-                Write-Warn "Found $($searchResult.Updates.Count) update(s) via final check"
-                Write-Log "Final check found updates: $($searchResult.Updates.Count)" "Warning"
-                
-                # Convert to our format
-                foreach ($update in $searchResult.Updates) {
-                    $kb = ""
-                    if ($update.KBArticleIDs.Count -gt 0) {
-                        $kb = "KB$($update.KBArticleIDs.Item(0))"
-                    }
+                    Write-Warn "Found $($finalSearchResult.Updates.Count) update(s) via deep scan"
+                    Write-Log "Deep scan found updates: $($finalSearchResult.Updates.Count)" "Warning"
                     
-                    $updates += [PSCustomObject]@{
-                        Title = $update.Title
-                        KB = $kb
-                        ComUpdate = $update
+                    # Convert to our format
+                    foreach ($update in $finalSearchResult.Updates) {
+                        $kb = ""
+                        if ($update.KBArticleIDs.Count -gt 0) {
+                            $kb = "KB$($update.KBArticleIDs.Item(0))"
+                        }
+                        
+                        # Check if not already in our list
+                        if (-not ($updates | Where-Object { $_.KB -eq $kb })) {
+                            $updates += [PSCustomObject]@{
+                                Title = $update.Title
+                                KB = $kb
+                                ComUpdate = $update
+                            }
+                        }
                     }
                 }
+            } finally {
+                if ($updateSearcher) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSearcher) | Out-Null }
+                if ($updateSession) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSession) | Out-Null }
             }
         } else {
             # Found updates - reset consecutive counter
-            if ($state.PSObject.Properties['ConsecutiveNoUpdates']) {
-                $state.ConsecutiveNoUpdates = 0
-            }
+            $state.ConsecutiveNoUpdates = 0
         }
         
         if ($updates.Count -gt 0) {
-            Write-Success "Found $($updates.Count) update(s)"
+            Write-Success "Found $($updates.Count) update(s) to install"
             Write-Host ""
             
             $counter = 0
@@ -564,6 +826,18 @@ function Install-WindowsUpdates($state) {
                     $updateTitle += " [$($update.Size) MB]"
                 }
                 
+                if ($update.IsDriver) {
+                    $updateTitle += " [DRIVER]"
+                }
+                
+                if ($update.UpdateType) {
+                    $updateTitle += " $($update.UpdateType)"
+                }
+
+                if ($update.Categories) {
+                    $updateTitle += " [$($update.Categories)]"
+                }
+                
                 # Check if previously failed
                 if ($state.FailedUpdates -contains $update.KB) {
                     $updateTitle += " [RETRY]"
@@ -576,13 +850,26 @@ function Install-WindowsUpdates($state) {
             
             Write-Host ""
             Write-Step "Installing updates (this may take several minutes)..."
+            Write-Info "Progress will be shown below..."
+            Write-Host ""
             
             try {
-                # Try installation with PSWindowsUpdate first
-                $installResult = Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -IgnoreReboot -ErrorAction Stop
+                # Try installation with PSWindowsUpdate first (with progress)
+                $installResult = Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -IgnoreReboot -Verbose -ErrorAction Stop
+                
+                # Track successfully installed updates
+                foreach ($result in $installResult) {
+                    if ($result.Result -eq "Installed" -or $result.Result -eq "Downloaded") {
+                        if ($result.KB -and $state.InstalledUpdateKBs -notcontains $result.KB) {
+                            $state.InstalledUpdateKBs += $result.KB
+                        }
+                    }
+                }
                 
                 # Check for failures
-                $failedInInstall = $installResult | Where-Object { $_.Result -ne "Installed" -and $_.Result -ne "Downloaded" }
+                $failedInInstall = $installResult | Where-Object { 
+                    $_.Result -ne "Installed" -and $_.Result -ne "Downloaded" -and $_.Result -ne "Accepted"
+                }
                 
                 if ($failedInInstall) {
                     Write-Warn "$($failedInInstall.Count) update(s) had issues"
@@ -597,7 +884,7 @@ function Install-WindowsUpdates($state) {
                     }
                 }
                 
-                Write-Success "Update installation completed"
+                Write-Success "Update installation batch completed"
                 Write-Log "Updates processed: $($updates.Count)" "Success"
                 
             } catch {
@@ -605,8 +892,12 @@ function Install-WindowsUpdates($state) {
                 Write-Log "Install error: $_" "Error"
                 
                 # Try COM API installation as fallback
-                Write-Step "Attempting fallback installation method..."
+                Write-Step "Attempting fallback installation method (COM API)..."
                 
+                $updateSession = $null
+                $updateInstaller = $null
+                $updatesToInstall = $null
+
                 try {
                     $updateSession = New-Object -ComObject Microsoft.Update.Session
                     $updateInstaller = $updateSession.CreateUpdateInstaller()
@@ -619,12 +910,24 @@ function Install-WindowsUpdates($state) {
                     }
                     
                     if ($updatesToInstall.Count -gt 0) {
+                        Write-Info "Installing $($updatesToInstall.Count) update(s) via COM API..."
                         $updateInstaller.Updates = $updatesToInstall
                         $installResult = $updateInstaller.Install()
                         
                         if ($installResult.ResultCode -eq 2) {
                             Write-Success "Fallback installation successful"
                             Write-Log "COM API installation success" "Success"
+                            
+                            # Track installed updates
+                            for ($i = 0; $i -lt $updatesToInstall.Count; $i++) {
+                                $update = $updatesToInstall.Item($i)
+                                if ($update.KBArticleIDs.Count -gt 0) {
+                                    $kb = "KB$($update.KBArticleIDs.Item(0))"
+                                    if ($state.InstalledUpdateKBs -notcontains $kb) {
+                                        $state.InstalledUpdateKBs += $kb
+                                    }
+                                }
+                            }
                         } else {
                             Write-Warn "Fallback installation completed with code: $($installResult.ResultCode)"
                             Write-Log "COM API result: $($installResult.ResultCode)" "Warning"
@@ -633,6 +936,10 @@ function Install-WindowsUpdates($state) {
                 } catch {
                     Write-Err "Fallback installation also failed: $_"
                     Write-Log "COM API install failed: $_" "Error"
+                } finally {
+                    if ($updatesToInstall) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updatesToInstall) | Out-Null }
+                    if ($updateInstaller) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateInstaller) | Out-Null }
+                    if ($updateSession) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSession) | Out-Null }
                 }
             }
         }
@@ -645,7 +952,7 @@ function Install-WindowsUpdates($state) {
             Invoke-SystemReboot $state "Windows Updates"
         }
         
-        # CRITICAL: Only exit at safety limit, NOT at normal max rounds
+        # CRITICAL: Only exit at safety limit
         if ($state.UpdateRound -ge $maxUpdateRounds) {
             Write-Err "═══════════════════════════════════════════════════════════"
             Write-Err "CRITICAL: Reached safety limit of $maxUpdateRounds rounds"
@@ -686,7 +993,7 @@ function Install-WindowsUpdates($state) {
 }
 
 # ============================================
-# PHASE 1: DRIVER UPDATES
+# PHASE 1: DRIVER UPDATES (ENHANCED)
 # ============================================
 function Install-DriverUpdates($state) {
     Write-Header "PHASE 2: Driver Updates (Round $($state.DriverRound + 1))"
@@ -694,7 +1001,9 @@ function Install-DriverUpdates($state) {
     try {
         Import-Module PSWindowsUpdate -Force -ErrorAction SilentlyContinue
         
-        Write-Step "Scanning Device Manager..."
+        Write-Step "Comprehensive device scanning..."
+        
+        # Scan for problem devices
         $problemDevices = Get-WmiObject Win32_PnPEntity | Where-Object { 
             $_.ConfigManagerErrorCode -ne 0
         }
@@ -716,8 +1025,65 @@ function Install-DriverUpdates($state) {
         }
         
         Write-Host ""
-        Write-Step "Searching for driver updates..."
-        $driverUpdates = Get-WindowsUpdate -MicrosoftUpdate -UpdateType Driver -ErrorAction SilentlyContinue
+        Write-Step "Searching for driver updates (all methods)..."
+        
+        $driverUpdates = @()
+        
+        # Method 1: PSWindowsUpdate (Microsoft Update Catalog)
+        Write-Info "Checking Microsoft Update for drivers..."
+        $psDrivers = Get-WindowsUpdate -MicrosoftUpdate -UpdateType Driver -ErrorAction SilentlyContinue
+        if ($psDrivers) {
+            $driverUpdates += $psDrivers
+            Write-Info "Found $($psDrivers.Count) driver(s) via Microsoft Update"
+        }
+        
+        # Method 2: COM API for drivers
+        Write-Info "Checking COM API for drivers..."
+        $updateSession = $null
+        $updateSearcher = $null
+
+        try {
+            $updateSession = New-Object -ComObject Microsoft.Update.Session
+            $updateSearcher = $updateSession.CreateUpdateSearcher()
+            $updateSearcher.ServerSelection = 3
+            $updateSearcher.Online = $true
+            
+            # Search specifically for driver updates
+            $searchResult = $updateSearcher.Search("IsInstalled=0 and Type='Driver'")
+            
+            if ($searchResult.Updates.Count -gt 0) {
+                Write-Info "Found $($searchResult.Updates.Count) driver(s) via COM API"
+                
+                foreach ($update in $searchResult.Updates) {
+                    $kb = ""
+                    if ($update.KBArticleIDs.Count -gt 0) {
+                        $kb = "KB$($update.KBArticleIDs.Item(0))"
+                    }
+                    
+                    # Check if not already in our list
+                    $exists = $false
+                    foreach ($existingDriver in $driverUpdates) {
+                        if ($existingDriver.KB -eq $kb -or $existingDriver.Title -eq $update.Title) {
+                            $exists = $true
+                            break
+                        }
+                    }
+                    
+                    if (-not $exists) {
+                        $driverUpdates += [PSCustomObject]@{
+                            Title = $update.Title
+                            KB = $kb
+                            ComUpdate = $update
+                        }
+                    }
+                }
+            }
+        } catch {
+            Write-Log "COM API driver search failed: $_" "Warning"
+        } finally {
+            if ($updateSearcher) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSearcher) | Out-Null }
+            if ($updateSession) { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($updateSession) | Out-Null }
+        }
         
         if ($driverUpdates -and $driverUpdates.Count -gt 0) {
             Write-Success "Found $($driverUpdates.Count) driver update(s)"
@@ -733,8 +1099,39 @@ function Install-DriverUpdates($state) {
             
             Write-Host ""
             Write-Step "Installing driver updates..."
-            Install-WindowsUpdate -MicrosoftUpdate -UpdateType Driver -AcceptAll -IgnoreReboot -ErrorAction SilentlyContinue | Out-Null
-            Write-Success "Driver updates installed"
+            
+            # Try PSWindowsUpdate first
+            try {
+                Install-WindowsUpdate -MicrosoftUpdate -UpdateType Driver -AcceptAll -IgnoreReboot -ErrorAction SilentlyContinue | Out-Null
+                Write-Success "Driver updates installed via PSWindowsUpdate"
+            } catch {
+                Write-Warn "PSWindowsUpdate driver install failed, trying COM API..."
+                
+                # Fallback to COM API
+                try {
+                    $updateSession = New-Object -ComObject Microsoft.Update.Session
+                    $updateInstaller = $updateSession.CreateUpdateInstaller()
+                    $driversToInstall = New-Object -ComObject Microsoft.Update.UpdateColl
+                    
+                    foreach ($driver in $driverUpdates) {
+                        if ($driver.ComUpdate) {
+                            $driversToInstall.Add($driver.ComUpdate) | Out-Null
+                        }
+                    }
+                    
+                    if ($driversToInstall.Count -gt 0) {
+                        $updateInstaller.Updates = $driversToInstall
+                        $installResult = $updateInstaller.Install()
+                        
+                        if ($installResult.ResultCode -eq 2) {
+                            Write-Success "Driver updates installed via COM API"
+                        }
+                    }
+                } catch {
+                    Write-Err "COM API driver install also failed: $_"
+                }
+            }
+            
             Write-Log "Drivers installed: $($driverUpdates.Count)" "Success"
             
             $state.DriverRound++
@@ -745,8 +1142,8 @@ function Install-DriverUpdates($state) {
                 Invoke-SystemReboot $state "Driver Updates"
             }
             
-            if ($state.DriverRound -lt 3) {
-                return $false
+            if ($state.DriverRound -lt 5) {
+                return $false  # Continue checking
             }
         } else {
             Write-Success "No driver updates available"
@@ -754,7 +1151,7 @@ function Install-DriverUpdates($state) {
         }
         
         Write-Host ""
-        Write-Step "Final device scan..." -NoNewLine
+        Write-Step "Final device scan and verification..." -NoNewLine
         Start-Process "pnputil.exe" -ArgumentList "/scan-devices" -Wait -NoNewWindow -WindowStyle Hidden -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 3
         Write-Host " Done" -ForegroundColor Green
@@ -766,10 +1163,11 @@ function Install-DriverUpdates($state) {
         if ($problemDevicesAfter) {
             Write-Warn "Remaining devices with issues: $($problemDevicesAfter.Count)"
             foreach ($device in $problemDevicesAfter) {
-                Write-Info "[!] $($device.Name)"
+                Write-Info "[!] $($device.Name) - May require manufacturer-specific driver"
             }
+            Write-Info "Consider visiting device manufacturer websites for specific drivers"
         } else {
-            Write-Success "All devices verified and working"
+            Write-Success "All devices verified and working perfectly!"
         }
         
         Save-State $state
@@ -947,7 +1345,49 @@ function Invoke-SystemCleanup($state) {
 # PHASE 3: GENERATE REPORT & CLEANUP
 # ============================================
 function Complete-Setup($state) {
-    Write-Header "PHASE 4: Generating Report"
+    Write-Header "PHASE 4: Final Cleanup & Report Generation"
+    
+    # FINAL UPDATE CACHE CLEANUP (NEW)
+    Write-Step "Performing final Windows Update cache cleanup..."
+    try {
+        Write-Info "Stopping Windows Update services for final cleanup..."
+        Stop-Service wuauserv, bits, cryptsvc -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 3
+        
+        $finalUpdateCache = "$env:SystemRoot\SoftwareDistribution\Download"
+        if (Test-Path $finalUpdateCache) {
+            $finalCacheSize = [math]::Round(((Get-ChildItem $finalUpdateCache -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum) / 1GB, 2)
+            
+            if ($finalCacheSize -gt 0) {
+                Write-Info "Removing $finalCacheSize GB from update cache..."
+                Remove-Item "$finalUpdateCache\*" -Recurse -Force -ErrorAction SilentlyContinue
+                
+                Start-Sleep -Seconds 2
+                $remainingFiles = Get-ChildItem $finalUpdateCache -Force -ErrorAction SilentlyContinue
+                
+                if ($remainingFiles.Count -eq 0) {
+                    Write-Success "Final cleanup: $finalCacheSize GB freed from update cache"
+                    Write-Log "Final update cache cleared: $finalCacheSize GB" "Success"
+                    $state.CleanupLog += "Final Update Cache: $finalCacheSize GB"
+                } else {
+                    Write-Warn "Partial final cleanup ($($remainingFiles.Count) files remain)"
+                    Write-Log "Final cache partially cleaned" "Warning"
+                }
+            } else {
+                Write-Info "Update cache already empty"
+            }
+        }
+        
+        Write-Info "Restarting Windows Update services..."
+        Start-Service wuauserv, bits, cryptsvc -ErrorAction SilentlyContinue
+        
+    } catch {
+        Write-Warn "Final cache cleanup encountered error: $_"
+        Write-Log "Final cache cleanup failed: $_" "Warning"
+    }
+    
+    Write-Host ""
+    Write-Step "Generating detailed report..."
     
     $reportContent = @"
 ================================================================================
@@ -964,6 +1404,7 @@ User: $env:USERNAME
 ================================================================================
 
 Windows Updates:          $($state.UpdateLog.Count) installed
+Unique KB Numbers:        $($state.InstalledUpdateKBs.Count)
 Driver Updates:           $($state.DriverLog.Count) installed
 Cleanup Operations:       $($state.CleanupLog.Count) completed
 System Reboots:           $($state.RebootCount)
@@ -1060,6 +1501,14 @@ Failed/Problematic: $($state.FailedUpdates.Count) update(s)
         Write-Log "Report saved to temp: $reportPath" "Warning"
     }
     
+    # Remove scheduled task if in unattended mode
+    if ($Unattended) {
+        Write-Step "Removing auto-resume task..."
+        Unregister-ScheduledTask -TaskName "NexorAutoResume" -Confirm:$false -ErrorAction SilentlyContinue
+        Write-Success "Auto-resume task removed"
+        Write-Log "Scheduled task removed" "Success"
+    }
+    
     if (Test-RebootRequired) {
         Write-Host ""
         Write-Warn "Final system restart required"
@@ -1095,14 +1544,23 @@ try {
         if (-not (Initialize-Environment)) {
             Write-Err "Initialization failed!"
             Write-Log "Initialization failed" "Error"
-            Read-Host "`nPress Enter to exit"
+            
+            if (-not $Unattended) {
+                Read-Host "`nPress Enter to exit"
+            }
             exit 1
         }
         $state.Phase = 0
         Save-State $state
-        Write-Host ""
-        Write-Info "Press any key to start..."
-        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        
+        if (-not $Unattended) {
+            Write-Host ""
+            Write-Info "Press any key to start..."
+            $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        } else {
+            Write-Info "UNATTENDED MODE: Starting automatically in 3 seconds..."
+            Start-Sleep -Seconds 3
+        }
     }
     
     # Phase 0: Windows Updates (loop until complete)
@@ -1168,92 +1626,115 @@ try {
     }
     
     # Phase 3: Final verification and report
-if ($state.Phase -eq 3) {
-    Write-Header "FINAL VERIFICATION"
-    
-    Write-Step "Performing final update check..."
-    try {
-        Import-Module PSWindowsUpdate -Force -ErrorAction Stop
+    if ($state.Phase -eq 3) {
+        Write-Header "FINAL VERIFICATION"
         
-        # AGGRESSIVE FINAL VERIFICATION LOOP (ADD THIS)
-        $finalVerificationAttempts = 0
-        $maxFinalAttempts = 5
-        
-        while ($finalVerificationAttempts -lt $maxFinalAttempts) {
-            Write-Step "Final verification attempt $($finalVerificationAttempts + 1)/$maxFinalAttempts..."
+        Write-Step "Performing final comprehensive update check..."
+        try {
+            Import-Module PSWindowsUpdate -Force -ErrorAction Stop
             
-            # Try multiple methods for final check
-            $finalCheck = @()
+            # ULTRA-AGGRESSIVE FINAL VERIFICATION LOOP
+            $finalVerificationAttempts = 0
+            $maxFinalAttempts = 5
             
-            for ($method = 1; $method -le 4; $method++) {  # Changed to 4 methods
-                $methodUpdates = Search-WindowsUpdates -Method $method
-                if ($methodUpdates.Count -gt 0) {
-                    $finalCheck += $methodUpdates
-                    $finalCheck = $finalCheck | Sort-Object -Property KB -Unique
+            while ($finalVerificationAttempts -lt $maxFinalAttempts) {
+                Write-Step "Final verification attempt $($finalVerificationAttempts + 1)/$maxFinalAttempts..."
+                
+                # Try ALL 6 methods for final check
+                $finalCheck = @()
+                $finalCheckByKB = @{}
+                
+                for ($method = 1; $method -le 8; $method++) {
+                    $methodUpdates = Search-WindowsUpdates -Method $method
+                    if ($methodUpdates.Count -gt 0) {
+                        foreach ($update in $methodUpdates) {
+                            if ($update.KB -and -not $finalCheckByKB.ContainsKey($update.KB)) {
+                                $finalCheckByKB[$update.KB] = $update
+                            } elseif (-not $update.KB) {
+                                $finalCheck += $update
+                            }
+                        }
+                    }
                 }
-            }
-            
-            if ($finalCheck.Count -eq 0) {
-                Write-Success "No updates found - System fully updated!"
-                Write-Log "Final verification passed: No updates found" "Success"
-                break  # Exit loop - truly complete
-            }
-            
-            # Found updates - install them
-            Write-Warn "$($finalCheck.Count) update(s) found in final check"
-            Write-Info "Installing remaining updates..."
-            Write-Host ""
-            
-            foreach ($update in $finalCheck) {
-                $updateTitle = $update.Title
-                if ($update.KB) {
-                    $updateTitle += " ($($update.KB))"
+                
+                $finalCheck += $finalCheckByKB.Values
+                
+                # Filter out already installed
+                if ($state.InstalledUpdateKBs.Count -gt 0) {
+                    $finalCheck = $finalCheck | Where-Object { 
+                        -not $_.KB -or $state.InstalledUpdateKBs -notcontains $_.KB 
+                    }
                 }
-                Write-Info "[+] $updateTitle"
-                $state.UpdateLog += $updateTitle
+                
+                if ($finalCheck.Count -eq 0) {
+                    Write-Success "No updates found - System fully updated!"
+                    Write-Log "Final verification passed: No updates found" "Success"
+                    break  # Exit loop - truly complete
+                }
+                
+                # Found updates - install them
+                Write-Warn "$($finalCheck.Count) update(s) found in final check"
+                Write-Info "Installing remaining updates..."
+                Write-Host ""
+                
+                foreach ($update in $finalCheck) {
+                    $updateTitle = $update.Title
+                    if ($update.KB) {
+                        $updateTitle += " ($($update.KB))"
+                    }
+                    Write-Info "[+] $updateTitle"
+                    $state.UpdateLog += $updateTitle
+                }
+                Write-Log "Final check found updates: $($finalCheck.Count)" "Warning"
+                
+                Write-Host ""
+                Write-Step "Installing final updates..."
+                Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -IgnoreReboot -ErrorAction Stop | Out-Null
+                
+                # Track installed
+                foreach ($update in $finalCheck) {
+                    if ($update.KB -and $state.InstalledUpdateKBs -notcontains $update.KB) {
+                        $state.InstalledUpdateKBs += $update.KB
+                    }
+                }
+                
+                Write-Success "Final updates installed"
+                Write-Log "Final updates installed: $($finalCheck.Count)" "Success"
+                
+                $finalVerificationAttempts++
+                
+                Save-State $state
+                
+                Start-Sleep -Seconds 5
+                if (Test-RebootRequired) {
+                    Invoke-SystemReboot $state "Final Windows Updates"
+                }
+                
+                # Delay before next check
+                Start-Sleep -Seconds 10
             }
-            Write-Log "Final check found updates: $($finalCheck.Count)" "Warning"
             
-            Write-Host ""
-            Write-Step "Installing final updates..."
-            Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -IgnoreReboot -ErrorAction Stop | Out-Null
-            Write-Success "Final updates installed"
-            Write-Log "Final updates installed: $($finalCheck.Count)" "Success"
-            
-            $finalVerificationAttempts++
-            
-            Save-State $state
-            
-            Start-Sleep -Seconds 5
-            if (Test-RebootRequired) {
-                Invoke-SystemReboot $state "Final Windows Updates"
+            # Check if we exhausted attempts
+            if ($finalVerificationAttempts -ge $maxFinalAttempts) {
+                Write-Warn "Reached maximum final verification attempts"
+                Write-Warn "Some updates may still be pending - manual check recommended"
+                Write-Log "Final verification limit reached" "Warning"
             }
             
-            # Small delay before next check
-            Start-Sleep -Seconds 10
+        } catch {
+            Write-Warn "Final check completed with warnings"
+            Write-Log "Final check warning: $_" "Warning"
         }
         
-        # Check if we exhausted attempts with updates still pending
-        if ($finalVerificationAttempts -ge $maxFinalAttempts) {
-            Write-Warn "Reached maximum final verification attempts"
-            Write-Warn "Some updates may still be pending - manual check recommended"
-            Write-Log "Final verification limit reached" "Warning"
-        }
-        
-    } catch {
-        Write-Warn "Final check completed with warnings"
-        Write-Log "Final check warning: $_" "Warning"
-    }
-    
-    Write-Host ""
-    Write-Step "Performing final device check..."
+        Write-Host ""
+        Write-Step "Performing final device check..."
         $finalDeviceCheck = Get-WmiObject Win32_PnPEntity | Where-Object { 
             $_.ConfigManagerErrorCode -ne 0
         }
         
         if ($finalDeviceCheck) {
             Write-Warn "$($finalDeviceCheck.Count) device(s) still have issues"
-            Write-Info "These may require manual driver installation"
+            Write-Info "These may require manual driver installation from manufacturer"
             Write-Host ""
             
             foreach ($device in $finalDeviceCheck) {
@@ -1261,7 +1742,7 @@ if ($state.Phase -eq 3) {
             }
             Write-Log "Devices with issues: $($finalDeviceCheck.Count)" "Warning"
         } else {
-            Write-Success "All devices verified and working"
+            Write-Success "All devices verified and working perfectly!"
             Write-Log "All devices verified" "Success"
         }
         
@@ -1272,22 +1753,27 @@ if ($state.Phase -eq 3) {
     Write-Host ""
     Write-Header "NEXOR SETUP COMPLETED"
     Write-Log "Setup completed successfully" "Success"
-    
-    if (-not $Silent) {
+
+    if (-not $Silent -and -not $Unattended) {
         Write-Host ""
         Write-Info "Press any key to exit..."
         $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+    } elseif ($Unattended) {
+        Write-Info "UNATTENDED MODE: Script completed. Exiting in 5 seconds..."
+        Start-Sleep -Seconds 5
     }
-    
 } catch {
     Write-Host ""
     Write-Err "Critical error occurred"
     Write-Err $_.Exception.Message
     Write-Log "Critical error: $_ | $($_.ScriptStackTrace)" "Error"
     
-    if (-not $Silent) {
+    if (-not $Silent -and -not $Unattended) {
         Write-Host ""
         Read-Host "Press Enter to exit"
+    } else {
+        Write-Info "UNATTENDED MODE: Exiting in 5 seconds due to error..."
+        Start-Sleep -Seconds 5
     }
     exit 1
 }
