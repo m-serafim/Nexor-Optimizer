@@ -10,7 +10,8 @@ namespace Nexor
 {
     public partial class LicenseSettingsPage : Page
     {
-        private readonly LicenseService _licenseService = new();
+        // Point this to your API base URL
+        private readonly LicensingApiClient _apiClient = new("http://localhost:5239");
 
         public LicenseSettingsPage()
         {
@@ -113,15 +114,18 @@ namespace Nexor
                 LoadingPanel.Visibility = Visibility.Visible;
                 StatusBorder.Visibility = Visibility.Collapsed;
 
-                // Call the license service
-                var (success, message) = await _licenseService.ActivateAsync(licenseKey);
+                // Use machine name as machineId (or your own machine-id logic)
+                string machineId = Environment.MachineName;
+
+                // Call the API
+                var result = await _apiClient.ActivateAsync(licenseKey, machineId);
 
                 // Hide loading state
                 LoadingPanel.Visibility = Visibility.Collapsed;
                 BtnActivate.IsEnabled = true;
 
-                // Show result
-                ShowStatus(success, message);
+                // Show result from API
+                ShowStatus(result.Success, result.Message);
             }
             catch (Exception ex)
             {
