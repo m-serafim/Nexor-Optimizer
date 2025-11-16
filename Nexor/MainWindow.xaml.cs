@@ -16,9 +16,9 @@ namespace Nexor
     public partial class MainWindow : Window
     {
         private string _currentLanguage = "EN";
-        private DispatcherTimer _systemMonitorTimer;
-        private PerformanceCounter _cpuCounter;
-        private PerformanceCounter _ramCounter;
+        private DispatcherTimer? _systemMonitorTimer;
+        private PerformanceCounter? _cpuCounter;
+        private PerformanceCounter? _ramCounter;
 
         [DllImport("kernel32.dll", EntryPoint = "SetProcessWorkingSetSize")]
         public static extern int SetProcessWorkingSetSize(IntPtr process, int minimumWorkingSetSize, int maximumWorkingSetSize);
@@ -123,6 +123,7 @@ namespace Nexor
             BtnCleanup.Tag = "Normal";
             BtnPerformance.Tag = "Normal";
             BtnFreshSetup.Tag = "Normal";
+            BtnLicense.Tag = "Normal";
 
             // Set selected button
             if (selectedButton != null)
@@ -368,7 +369,7 @@ namespace Nexor
             }
         }
 
-        private void UpdateSystemMonitor(object sender, EventArgs e)
+        private void UpdateSystemMonitor(object? sender, EventArgs? e)
         {
             try
             {
@@ -642,6 +643,29 @@ namespace Nexor
             catch (Exception ex)
             {
                 MessageBox.Show($"Error loading Processes page: {ex.Message}", "Error",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void BtnLicense_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                SetSelectedMenuItem(BtnLicense);
+                var licenseSettingsPage = new LicenseSettingsPage();
+                if (MainContentFrame != null)
+                {
+                    MainContentFrame.Navigate(licenseSettingsPage);
+                    MainContentFrame.Visibility = Visibility.Visible;
+                }
+                if (DashboardContent != null)
+                {
+                    DashboardContent.Visibility = Visibility.Collapsed;
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error loading License Settings page: {ex.Message}", "Error",
                     MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }

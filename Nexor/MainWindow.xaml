@@ -529,6 +529,14 @@
                                     <TextBlock x:Name="TxtSettings" Text="Settings"/>
                                 </StackPanel>
                             </Button>
+
+                            <!-- License Button -->
+                            <Button x:Name="BtnLicense" Style="{StaticResource MenuButton}" Margin="0,0,0,4" Click="BtnLicense_Click">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="🔑" FontSize="16" Margin="0,0,10,0"/>
+                                    <TextBlock Text="License"/>
+                                </StackPanel>
+                            </Button>
                         </StackPanel>
 
                         <!-- Language Selector -->
@@ -590,7 +598,14 @@
                                         <TranslateTransform Y="-30"/>
                                     </TransformGroup>
                                 </StackPanel.RenderTransform>
-                                <TextBlock x:Name="TxtWelcome" Text="Welcome to Nexor" FontSize="32" FontWeight="Bold" Style="{StaticResource GradientText}"/>
+                                <TextBlock x:Name="TxtWelcome" Text="Welcome to Nexor" FontSize="32" FontWeight="Bold">
+                                    <TextBlock.Foreground>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                            <GradientStop Color="#FFFFFF" Offset="0"/>
+                                            <GradientStop Color="#B8C5D9" Offset="1"/>
+                                        </LinearGradientBrush>
+                                    </TextBlock.Foreground>
+                                </TextBlock>
                                 <TextBlock x:Name="TxtWelcomeSub" Text="Optimize, clean and speed up your PC" FontSize="14" Foreground="{StaticResource TextSecondary}"/>
                             </StackPanel>
 
@@ -892,7 +907,7 @@
 
                     <!-- Overlay -->
                     <Border x:Name="CleanupOverlay" Background="#E5000000" Visibility="Collapsed" Opacity="0">
-                        <Border CornerRadius="20" Width="480" Height="380" VerticalAlignment="Center" HorizontalAlignment="Center" BorderBrush="#1A1F2E" BorderThickness="1">
+                        <Border CornerRadius="20" Width="480" Height="380" VerticalAlignment="Center" HorizontalAlignment="Center" BorderBrush="#1A2B3C" BorderThickness="1">
                             <Border.Background>
                                 <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
                                     <GradientStop Color="#0F1419" Offset="0"/>
